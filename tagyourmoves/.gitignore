@@ -54,7 +54,6 @@ ENV/
 # YOLO, PyTorch, & ML Models
 # -------------------------
 # Ignore heavy model weights and checkpoints
-*.pt
 *.pth
 *.onnx
 *.weights
