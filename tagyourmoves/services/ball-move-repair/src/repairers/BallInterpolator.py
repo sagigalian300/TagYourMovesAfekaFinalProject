@@ -9,8 +9,8 @@ linear interpolation based on the timestamps of the frames.
 
 
 from typing import List
-from Ball import Ball
-from Frame import Frame
+from .Ball import Ball
+from .Frame import Frame
 
 class BallInterpolator:
     """

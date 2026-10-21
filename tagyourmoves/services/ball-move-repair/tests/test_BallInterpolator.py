@@ -1,35 +1,83 @@
-from src.repairers.Ball import Ball
-from src.repairers.Frame import Frame
-from src.repairers.BallInterpolator import BallInterpolator 
+import sys
+from pathlib import Path
 
-# 1. Create dummy frames with missing balls (None)
-frames = [
-    # Frame 1: Missing before any detection (Should back-fill using Frame 2)
-    Frame(frame_number=1, timestamp_ms=100.0, ball=None), 
-    
-    # Frame 2: Known Detection
-    Frame(frame_number=2, timestamp_ms=200.0, ball=Ball(0.95, 10.0, 10.0, 20.0, 20.0)),
-    
-    # Frame 3: Missing in the middle (Should interpolate exactly halfway between Frame 2 and 4)
-    Frame(frame_number=3, timestamp_ms=300.0, ball=None), 
-    
-    # Frame 4: Known Detection
-    Frame(frame_number=4, timestamp_ms=400.0, ball=Ball(0.88, 30.0, 30.0, 40.0, 40.0)),
-    
-    # Frame 5: Missing at the end (Should forward-fill using Frame 4)
-    Frame(frame_number=5, timestamp_ms=500.0, ball=None)  
-]
+# Add the 'ball-move-repair' directory to Python's search path
+ball_move_repair_dir = Path(__file__).resolve().parent.parent
+sys.path.append(str(ball_move_repair_dir))
 
-# 2. Initialize and run the interpolator
-interpolator = BallInterpolator(frames)
-interpolator.repair_missing_balls()
+import cv2
+import pickle
+from src.repairers.BallInterpolator import BallInterpolator
 
-# 3. Print the results to verify
-print("--- Interpolation Results ---")
-for f in interpolator.frames:
-    if f.ball:
-        # Format the coordinates to 1 decimal place for easy reading
-        coords = f"({f.ball.x1:.1f}, {f.ball.y1:.1f}) to ({f.ball.x2:.1f}, {f.ball.y2:.1f})"
-        print(f"Frame {f.frame_number} | Conf: {f.ball.confidence:.2f} | Coords: {coords}")
+def draw_interpolated_ball(image, ball):
+    """Draws green for real YOLO detections and red for interpolated detections."""
+    if ball is None:
+        return image
+    
+    x1, y1, x2, y2 = int(ball.x1), int(ball.y1), int(ball.x2), int(ball.y2)
+    
+    if ball.confidence == 0.0:
+        color = (0, 0, 255)  # Red for Interpolated
+        label = "Ball [Interpolated]"
     else:
-        print(f"Frame {f.frame_number} | Ball: None")
+        color = (0, 255, 0)  # Green for Real
+        label = f"Ball [{ball.confidence:.2f}]"
+        
+    cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(image, label, (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    return image
+
+def main():
+    current_dir = Path(__file__).resolve().parent
+    pickle_filename = str(current_dir / "detected_frames.pkl")
+    video_path = str(current_dir / "test_vod.mp4")
+
+    # 1. Load the raw frames data saved from Step 1
+    print(f"Loading raw frame data from '{pickle_filename}'...")
+    try:
+        with open(pickle_filename, "rb") as f:
+            frames_list = pickle.load(f)
+    except FileNotFoundError:
+        print(f"Error: Could not find '{pickle_filename}'. Run step1_generate_raw_yolo_video.py first.")
+        return
+
+    # 2. Run the BallInterpolator
+    print("Running Ball Interpolator...")
+    interpolator = BallInterpolator(frames_list)
+    interpolator.repair_missing_balls()
+
+    # 3. Read original video and save the interpolated output
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Error: Could not open video {video_path}")
+        return
+
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    # Save the video in the same directory as the script
+    video_output_path = str(current_dir / 'output_2_interpolated.mp4')
+    out_interp = cv2.VideoWriter(video_output_path, fourcc, fps, (width, height))
+
+    print("\n--- STEP 2: Drawing and Saving Interpolated Video ---")
+    for i in range(len(interpolator.frames)):
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        interp_ball = interpolator.frames[i].ball
+        draw_interpolated_ball(frame, interp_ball)
+        out_interp.write(frame)
+
+        if (i + 1) % 50 == 0:
+            print(f"Saved {i + 1}/{total_frames} frames...")
+
+    cap.release()
+    out_interp.release()
+    print("\nStep 2 Complete! Interpolated video saved to 'output_2_interpolated.mp4'")
+
+
+main()
