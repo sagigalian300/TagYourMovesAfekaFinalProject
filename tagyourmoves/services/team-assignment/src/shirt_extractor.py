@@ -1,41 +1,41 @@
 """
-Module for extracting the shirt region from a detected player's bounding box.
+Module for extracting the player crop and isolating the shirt region.
 """
 
 import numpy as np
 from contract.player.Player import Player
+from src.shirt_segmentation import ShirtSegmenter
 
-def crop_shirt(image: np.ndarray, player: Player) -> np.ndarray:
-    """Extracts the shirt region of interest (ROI) from the full image.
+def extract_shirt_from_player(image: np.ndarray, player: Player, segmenter: ShirtSegmenter) -> np.ndarray:
+    """Extracts the player from the frame and isolates the shirt.
 
-    Calculates a specific sub-region within the player's bounding box that 
-    most likely contains the shirt (ignoring the head, legs, and background).
+    First crops the entire player bounding box from the original image, 
+    then uses the semantic segmentation model to isolate shirt pixels.
 
     Args:
         image (np.ndarray): The full original video frame/image.
-        player (Player): The player object containing the full bounding box coordinates.
+        player (Player): The player object containing bounding box coordinates.
+        segmenter (ShirtSegmenter): The initialized semantic segmenter.
 
     Returns:
-        np.ndarray: A cropped image (numpy array) containing only the player's shirt. 
-            Returns an empty array if the bounding box is invalid.
+        np.ndarray: A cropped image of the player where all non-shirt 
+            pixels are colored black.
     """
     img_height, img_width = image.shape[:2]
     
-    p_x1, p_y1 = int(player.x1), int(player.y1)
-    p_x2, p_y2 = int(player.x2), int(player.y2)
+    # Extract coordinates and ensure they are within image bounds
+    p_x1 = max(0, int(player.x1))
+    p_y1 = max(0, int(player.y1))
+    p_x2 = min(img_width, int(player.x2))
+    p_y2 = min(img_height, int(player.y2))
     
-    box_width = p_x2 - p_x1
-    box_height = p_y2 - p_y1
+    # Crop the exact player bounding box
+    player_crop = image[p_y1:p_y2, p_x1:p_x2]
     
-    # Shirt area estimation: 15%-55% of height, trim 20% from sides
-    s_x1 = int(p_x1 + 0.20 * box_width)
-    s_y1 = int(p_y1 + 0.15 * box_height)
-    s_x2 = int(p_x2 - 0.20 * box_width)
-    s_y2 = int(p_y1 + 0.55 * box_height)
+    if player_crop.size == 0:
+        return np.array([])
+        
+    # Isolate shirt pixels using SegFormer
+    shirt_only_img = segmenter.extract_shirt(player_crop)
     
-    # Ensure coordinates do not exceed image boundaries
-    s_x1, s_x2 = max(0, s_x1), min(img_width, s_x2)
-    s_y1, s_y2 = max(0, s_y1), min(img_height, s_y2)
-    
-    # Return the cropped numpy array
-    return image[s_y1:s_y2, s_x1:s_x2]
+    return shirt_only_img

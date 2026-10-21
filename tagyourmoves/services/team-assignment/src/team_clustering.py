@@ -8,38 +8,48 @@ from typing import List
 from sklearn.cluster import KMeans
 from contract.player.Player import Player
 
+def extract_dominant_color(shirt_img: np.ndarray) -> np.ndarray:
+    """Extracts the dominant color from isolated shirt pixels.
 
-def extract_dominant_color(crop: np.ndarray) -> np.ndarray:
-    """Extracts the dominant color from a player's shirt crop.
-
-    Focuses on the central area of the crop to minimize background noise and 
-    converts the image to HSV to better handle lighting differences. Uses the 
-    median color instead of the mean to reduce the impact of outlier pixels 
-    (like logos, numbers, or skin).
+    Filters out the black background pixels created by the segmentation mask, 
+    converts the remaining shirt pixels to HSV, and uses K-Means to find the 
+    dominant color of the fabric.
 
     Args:
-        crop (np.ndarray): The cropped image array (BGR format from OpenCV).
+        shirt_img (np.ndarray): The masked BGR image containing only the shirt.
 
     Returns:
-        np.ndarray: A 1D array representing the median HSV color [H, S, V].
+        np.ndarray: A 1D array representing the dominant HSV color [H, S, V].
+            Returns a default [0, 0, 0] if no valid pixels exist.
     """
-    h, w = crop.shape[:2]
+    # Create a boolean mask of non-black pixels
+    mask = np.any(shirt_img != [0, 0, 0], axis=-1)
     
-    # Take the center 50% of the crop to avoid background and arms
-    center_crop = crop[int(h * 0.25):int(h * 0.75), int(w * 0.25):int(w * 0.75)]
+    # Extract valid BGR pixels (flattened to a 1D list of pixels)
+    valid_bgr_pixels = shirt_img[mask]
     
-    # Fallback if the crop is extremely small
-    if center_crop.size == 0:
-        center_crop = crop
+    if len(valid_bgr_pixels) == 0:
+        return np.array([0, 0, 0])
         
-    # Convert from BGR (OpenCV default) to HSV color space
-    hsv_crop = cv2.cvtColor(center_crop, cv2.COLOR_BGR2HSV)
+    # Convert pixels to HSV (Requires reshaping to 2D for cv2.cvtColor)
+    valid_bgr_pixels_2d = valid_bgr_pixels.reshape(1, -1, 3)
+    valid_hsv_pixels = cv2.cvtColor(valid_bgr_pixels_2d, cv2.COLOR_BGR2HSV).reshape(-1, 3)
     
-    # Calculate the median color across the spatial dimensions (axis 0 and 1)
-    median_color = np.median(hsv_crop, axis=(0, 1))
+    # Randomly sample pixels if there are too many (speeds up KMeans)
+    if len(valid_hsv_pixels) > 500:
+        indices = np.random.choice(len(valid_hsv_pixels), 500, replace=False)
+        sampled_pixels = valid_hsv_pixels[indices]
+    else:
+        sampled_pixels = valid_hsv_pixels
+        
+    # Run Mini K-Means to find the true fabric color (ignoring logos/stripes)
+    kmeans = KMeans(n_clusters=min(2, len(sampled_pixels)), random_state=42, n_init='auto')
+    labels = kmeans.fit_predict(sampled_pixels)
     
-    return median_color
-
+    counts = np.bincount(labels)
+    dominant_label = np.argmax(counts)
+    
+    return kmeans.cluster_centers_[dominant_label]
 
 def assign_teams_to_players(players: List[Player], shirt_crops: List[np.ndarray]) -> None:
     """Analyzes shirt colors and assigns team IDs to players.
@@ -50,30 +60,22 @@ def assign_teams_to_players(players: List[Player], shirt_crops: List[np.ndarray]
     Args:
         players (List[Player]): A list of Player objects to be updated.
         shirt_crops (List[np.ndarray]): A list of cropped shirt images corresponding 
-            to the players list (must be in the exact same order).
+            to the players list.
     """
-    # K-Means requires at least as many samples as clusters
     if len(players) < 2:
         print("[Clustering] Not enough players detected to form teams.")
         return
 
-    # Extract feature vectors (dominant colors) for all players
     color_features = []
     for crop in shirt_crops:
-        dominant_color = extract_dominant_color(crop)
-        color_features.append(dominant_color)
+        color_features.append(extract_dominant_color(crop))
         
-    # Convert to a 2D numpy array for Scikit-Learn processing
     X = np.array(color_features)
     
-    # Run K-Means clustering
-    # n_clusters=2 assumes 2 teams. n_init='auto' suppresses Sklearn warnings.
     kmeans = KMeans(n_clusters=2, random_state=42, n_init='auto')
     labels = kmeans.fit_predict(X)
     
-    # Assign the results back to the Player objects
     for i, player in enumerate(players):
-        # K-Means returns labels 0 and 1. We map them to Team 1 and Team 2.
         player.team = int(labels[i]) + 1
         
-    print(f"[Clustering] Successfully assigned {len(players)} players into 2 teams.")
+    print(f"[Clustering] Successfully assigned {len(players)} players into teams.")

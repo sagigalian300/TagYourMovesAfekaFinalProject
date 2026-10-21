@@ -1,2 +1,7 @@
 ultralytics
 scikit-learn
+
+transformers
+torch
+torchvision
+Pillow
