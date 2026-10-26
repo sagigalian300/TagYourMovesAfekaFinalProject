@@ -15,12 +15,13 @@ COPY requirements.txt .
 # Downloads the python dependencies in the requirements.txt we copied in the command above
 RUN pip install --no-cache-dir -r requirements.txt
 
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # How to build docker image:
-# docker will create an image named "tagyourmoves-yolo" and tells that the '.' (current) directory is the working space for the image
-    # docker build -t tagyourmoves-yolo .
+# docker will create an image named "tagyourmoves-object-detection" and tells that the '.' (current) directory is the working space for the image
+#   docker build -t tagyourmoves-object-detection .
 
 # How to run docker container:
 # docker will create a copy of the image (container) that will be removed automatically afterwards, docker will create a volume (two side tunnel between current dir - PWD in windows and /app in the linux) every change in one of them will occur in the other.
-# we specify the name of the image we want to create the container from, then we run the script image-inference.py that is in the tests folder.
-    # docker run --rm -v "${PWD}:/app" tagyourmoves-yolo python tests/image-inference.py
+# we specify the name of the image we want to create the container from, then we run the server with hot reload.
+#   docker run --rm -p 8001:8000 -v "${PWD}:/app" -e PYTHONPATH=/app tagyourmoves-object-detection uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
