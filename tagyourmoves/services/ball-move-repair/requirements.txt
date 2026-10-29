@@ -1,0 +1,2 @@
+scipy numpy
+ultralytics opencv-python
