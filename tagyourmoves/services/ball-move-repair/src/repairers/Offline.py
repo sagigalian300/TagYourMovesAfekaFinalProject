@@ -1,7 +1,7 @@
 import pandas as pd
 from typing import List
-from .Frame import Frame
-from .Ball import Ball
+from Frame import Frame
+from Ball import Ball
 
 def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15) -> List[Frame]:
     """
@@ -48,14 +48,22 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
         return frames
 
     # 2. Interpolate the missing bounding box coordinates
-    # We use 'linear' as a safe baseline. For basketballs, you can later experiment 
-    # with method='quadratic' because balls travel in parabolic arcs.
+    # Try quadratic for parabolic arcs, fallback to linear if not enough data points
+    # We use 'linear' as a safe baseline.
     # We use 'limit' to prevent interpolating when the ball goes off-screen for a long time.
-    interpolated_df = df[['x1', 'y1', 'x2', 'y2']].interpolate(
-        method='linear', 
-        limit=max_gap_frames, 
-        limit_direction='both' # Interpolate forward and backward
-    )
+    try:
+        interpolated_df = df[['x1', 'y1', 'x2', 'y2']].interpolate(
+            method='quadratic', 
+            limit=max_gap_frames, 
+            limit_direction='both'
+        )
+    except ValueError:
+        # Fallback to linear if there are fewer than 3 points (required for quadratic)
+        interpolated_df = df[['x1', 'y1', 'x2', 'y2']].interpolate(
+            method='linear', 
+            limit=max_gap_frames, 
+            limit_direction='both'
+        )
 
     # 3. Reconstruct the missing Ball objects in the frames
     for f in frames:
@@ -68,12 +76,16 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
                 # Create a synthetic ball. 
                 # We set confidence to 0.0 (or a negative flag like -1.0) 
                 # so upstream services know this was an algorithm estimate, not a model detection.
+
+                # Clamp negative values to 0.0 (can also pass max width/height to clamp the upper bounds)
+                x1 = max(0.0, float(row['x1']))
+                y1 = max(0.0, float(row['y1']))
+                x2 = max(0.0, float(row['x2']))
+                y2 = max(0.0, float(row['y2']))
+
                 f.ball = Ball(
                     confidence=0.0, 
-                    x1=float(row['x1']),
-                    y1=float(row['y1']),
-                    x2=float(row['x2']),
-                    y2=float(row['y2'])
+                    x1=x1, y1=y1, x2=x2, y2=y2
                 )
 
     return frames

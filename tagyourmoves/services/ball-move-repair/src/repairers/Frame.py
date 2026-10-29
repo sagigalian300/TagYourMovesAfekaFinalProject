@@ -1,7 +1,7 @@
 from typing import List, Optional
-from .Ball import Ball
-from .Rim import Rim
-from .Player import Player
+from Ball import Ball
+from Rim import Rim
+from Player import Player
 
 class Frame:
     """
