@@ -4,34 +4,42 @@ from typing import List
 from ultralytics import YOLO
 
 from Ball import Ball
+from Player import Player 
 from Frame import Frame
 from Offline import estimate_missing_balls_offline
+
 
 # Class ID 32 is 'sports ball' in standard COCO YOLO models. 
 # Change BALL_CLASS_ID to 0 if your weights (yolov8s.pt) are custom-trained specifically for basketballs.
 BALL_CLASS_ID = 32
+PERSON_CLASS_ID = 0
 
-def detect_ball_yolo(model: YOLO, image_frame, confidence_threshold: float = 0.25):
+def detect_objects_yolo(model: YOLO, image_frame, confidence_threshold: float = 0.25):
     """
-    Runs YOLO inference on a single video frame to detect the basketball.
+    Runs YOLO inference on a single video frame to detect the ball AND players.
     """
     results = model(image_frame, verbose=False)[0]
     
     best_ball = None
-    highest_conf = 0.0
+    highest_conf_ball = 0.0
+    players = []
 
     for box in results.boxes:
         cls_id = int(box.cls[0])
         conf = float(box.conf[0])
 
-        if cls_id == BALL_CLASS_ID and conf >= confidence_threshold:
-            if conf > highest_conf:
-                highest_conf = conf
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                best_ball = Ball(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2)
+        if conf >= confidence_threshold:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            
+            if cls_id == BALL_CLASS_ID:
+                if conf > highest_conf_ball:
+                    highest_conf_ball = conf
+                    best_ball = Ball(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2)
+            
+            elif cls_id == PERSON_CLASS_ID:
+                players.append(Player(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2))
 
-    return best_ball
-
+    return best_ball, players
 
 def test_offline_estimation(input_video_path: str, output_video_path: str, model_path: str):
     # Initialize YOLO Model
@@ -58,13 +66,14 @@ def test_offline_estimation(input_video_path: str, output_video_path: str, model
             
         timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
         
-        # Detect the ball in the actual video frame
-        ball = detect_ball_yolo(model, image_frame)
+        # Detect the balland players in the actual video frame
+        ball, players = detect_objects_yolo(model, image_frame)
         
         frames_metadata.append(Frame(
             frame_number=frame_number,
             timestamp_ms=timestamp_ms,
-            ball=ball
+            ball=ball,
+            players=players
         ))
         frame_number += 1
         
