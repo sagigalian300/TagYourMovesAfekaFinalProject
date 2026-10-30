@@ -1,0 +1,3 @@
+# YOLO detection / camera motion caches written by test_offline.py / evaluate_offline.py
+*.detections.json
+*.camera.npy
