@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import cv2
 import numpy as np
@@ -7,37 +8,70 @@ from ultralytics import YOLO
 
 from Ball import Ball
 from Player import Player
+from Rim import Rim
 from Frame import Frame
 from Offline import estimate_missing_balls_offline
 from OpticalFlowTracker import BallOpticalFlowTracker # Import the LK Tracker
 from CameraMotion import estimate_camera_motion
 
-BALL_CLASS_ID = 32
-PERSON_CLASS_ID = 0
+# Basketball-specific detector (classes: ball, human, rim).
+DEFAULT_MODEL = "basketball_yolov8n.onnx"
+DEFAULT_MODEL_URL = "https://huggingface.co/MTerryJack/Element-Detect-Basketball"
+DEFAULT_IMGSZ = 640  # the ONNX export only accepts its export size
 
-def detect_objects_yolo(model: YOLO, image_frame, confidence_threshold: float = 0.25):
-    results = model(image_frame, verbose=False)[0]
+"""
+DEFAULT_MODEL = "yolov8s.pt"
+DEFAULT_IMGSZ = 1280
+"""
+
+
+# Classes are matched by name, so COCO models ('sports ball', 'person') and basketball
+# models ('ball', 'human', 'rim', or per-player classes like 'Red_23') all work unchanged
+BALL_NAMES = {'sports ball', 'ball', 'basketball'}
+RIM_NAMES = {'rim', 'hoop', 'basket'}
+PLAYER_NAMES = {'person', 'human', 'player', 'referee'}
+PLAYER_PATTERN = re.compile(r'[a-z]+_\d+')  # jersey / referee classes, e.g. 'red_23', 'refree_1'
+
+
+def class_role(name: str) -> Optional[str]:
+    name = name.lower()
+    if name in BALL_NAMES:
+        return 'ball'
+    if name in RIM_NAMES:
+        return 'rim'
+    if name in PLAYER_NAMES or PLAYER_PATTERN.fullmatch(name):
+        return 'player'
+    return None
+
+
+def detect_objects_yolo(model: YOLO, image_frame, confidence_threshold: float = 0.25, imgsz: Optional[int] = None):
+    results = model(image_frame, verbose=False, **({'imgsz': imgsz} if imgsz else {}))[0]
     best_ball = None
     highest_conf_ball = 0.0
     players = []
+    rims = []
 
     for box in results.boxes:
-        cls_id = int(box.cls[0])
+        role = class_role(results.names[int(box.cls[0])])
         conf = float(box.conf[0])
 
         if conf >= confidence_threshold:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
-            if cls_id == BALL_CLASS_ID and conf > highest_conf_ball:
+            if role == 'ball' and conf > highest_conf_ball:
                 highest_conf_ball = conf
                 best_ball = Ball(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2)
-            elif cls_id == PERSON_CLASS_ID:
+            elif role == 'player':
                 players.append(Player(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2))
+            elif role == 'rim':
+                rims.append(Rim(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2))
 
-    return best_ball, players
+    return best_ball, players, rims
 
 
-def default_cache_path(video_path: str, model_path: str) -> str:
+def default_cache_path(video_path: str, model_path: str, imgsz: Optional[int] = None) -> str:
     model_name = os.path.splitext(os.path.basename(model_path))[0]
+    if imgsz:
+        model_name += f"-{imgsz}"
     return f"{os.path.splitext(video_path)[0]}.{model_name}.detections.json"
 
 
@@ -50,6 +84,7 @@ def save_detections(frames: List[Frame], cache_path: str):
             'timestamp_ms': f.timestamp_ms,
             'ball': [b.confidence, b.x1, b.y1, b.x2, b.y2] if b is not None else None,
             'players': [[p.confidence, p.x1, p.y1, p.x2, p.y2] for p in f.players],
+            'rims': [[r.confidence, r.x1, r.y1, r.x2, r.y2] for r in f.rims],
         })
     with open(cache_path, 'w') as fh:
         json.dump(data, fh)
@@ -64,18 +99,23 @@ def load_detections(cache_path: str) -> List[Frame]:
         timestamp_ms=d['timestamp_ms'],
         ball=Ball(*d['ball']) if d['ball'] is not None else None,
         players=[Player(*p) for p in d['players']],
+        rims=[Rim(*r) for r in d.get('rims', [])],
     ) for d in data]
 
 
-def detect_video(input_video_path: str, model_path: str, cache_path: Optional[str] = None) -> List[Frame]:
+def detect_video(input_video_path: str, model_path: str, cache_path: Optional[str] = None,
+                 imgsz: Optional[int] = None) -> List[Frame]:
     """
     Pass 1: runs YOLO on every frame. Results are cached as JSON, so re-runs and the
     evaluation harness don't pay for inference again.
+
+    imgsz: inference resolution. The ball is small, so a COCO model gains from 1280
+    over its default 640; ONNX exports only accept the size they were exported with.
     """
     if cache_path and os.path.exists(cache_path):
         return load_detections(cache_path)
 
-    model = YOLO(model_path)
+    model = YOLO(model_path, task='detect')
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
         raise IOError(f"Could not open video {input_video_path}")
@@ -91,8 +131,8 @@ def detect_video(input_video_path: str, model_path: str, cache_path: Optional[st
             break
 
         timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-        ball, players = detect_objects_yolo(model, image_frame)
-        frames.append(Frame(frame_number=frame_number, timestamp_ms=timestamp_ms, ball=ball, players=players))
+        ball, players, rims = detect_objects_yolo(model, image_frame, imgsz=imgsz)
+        frames.append(Frame(frame_number=frame_number, timestamp_ms=timestamp_ms, ball=ball, players=players, rims=rims))
         frame_number += 1
         if frame_number % 100 == 0:
             print(f"  {frame_number}/{total_frames}")
@@ -172,8 +212,19 @@ def render_video(input_video_path: str, frames: List[Frame], output_video_path: 
     out.release()
 
 
-def test_offline_estimation(input_video_path: str, output_video_path: str, model_path: str):
-    frames_metadata = detect_video(input_video_path, model_path, default_cache_path(input_video_path, model_path))
+def require_model(model_path: str):
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(
+            f"Detector weights not found: {model_path}\n"
+            f"Download weights.onnx from {DEFAULT_MODEL_URL} and save it as {DEFAULT_MODEL}"
+        )
+
+
+def test_offline_estimation(input_video_path: str, output_video_path: str, model_path: str, imgsz: Optional[int] = None):
+    cache_path = default_cache_path(input_video_path, model_path, imgsz)
+    if not os.path.exists(cache_path):
+        require_model(model_path)
+    frames_metadata = detect_video(input_video_path, model_path, cache_path, imgsz=imgsz)
 
     print("Estimating camera motion...")
     camera_motion = camera_motion_for(input_video_path, frames_metadata, default_camera_cache_path(input_video_path))
@@ -199,6 +250,6 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     input_path = os.path.join(script_dir, "test_vod2.mp4")
     output_path = os.path.join(script_dir, "output_interpolated.mp4")
-    weights_path = os.path.join(script_dir, "yolov8s.pt")
+    weights_path = os.path.join(script_dir, DEFAULT_MODEL)
 
-    test_offline_estimation(input_path, output_path, weights_path)
+    test_offline_estimation(input_path, output_path, weights_path, imgsz=DEFAULT_IMGSZ)

@@ -21,7 +21,7 @@ import cv2
 from Frame import Frame
 from Offline import estimate_missing_balls_offline
 from test_offline import (detect_video, load_detections, apply_optical_flow, default_cache_path,
-                          camera_motion_for, default_camera_cache_path)
+                          camera_motion_for, default_camera_cache_path, DEFAULT_MODEL, DEFAULT_IMGSZ)
 
 
 @dataclass
@@ -168,9 +168,10 @@ def evaluate(
     gap_range: Tuple[int, int] = (3, 30),
     min_gt_conf: float = 0.4,
     verbose: bool = True,
+    imgsz: Optional[int] = None,
 ) -> Dict:
-    cache_path = default_cache_path(video_path, model_path)
-    frames = detect_video(video_path, model_path, cache_path)
+    cache_path = default_cache_path(video_path, model_path, imgsz)
+    frames = detect_video(video_path, model_path, cache_path, imgsz=imgsz)
 
     cap = cv2.VideoCapture(video_path)
     frame_size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
@@ -204,7 +205,9 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description="Evaluate the offline ball estimator on artificially hidden detections.")
     parser.add_argument('--videos', nargs='+', default=['test_vod.mp4', 'test_vod2.mp4'])
-    parser.add_argument('--model', default='yolov8s.pt')
+    parser.add_argument('--model', default=DEFAULT_MODEL)
+    parser.add_argument('--imgsz', type=int, default=None,
+                        help=f"Inference size (default: {DEFAULT_IMGSZ} for the default model, the model's own otherwise)")
     parser.add_argument('--trials', type=int, default=5)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--max-gap', type=int, default=45)
@@ -219,4 +222,5 @@ if __name__ == "__main__":
             hint_pass=None if args.no_lk else apply_optical_flow,
             trials=args.trials,
             seed=args.seed,
+            imgsz=args.imgsz or (DEFAULT_IMGSZ if args.model == DEFAULT_MODEL else None),
         )

@@ -1,3 +1,6 @@
-scipy numpy
-ultralytics opencv-python
+scipy
+numpy
+ultralytics
+opencv-python
 filterpy
+onnxruntime
