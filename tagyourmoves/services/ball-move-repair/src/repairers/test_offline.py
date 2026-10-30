@@ -7,19 +7,13 @@ from Ball import Ball
 from Player import Player 
 from Frame import Frame
 from Offline import estimate_missing_balls_offline
+from OpticalFlowTracker import BallOpticalFlowTracker # Import the LK Tracker
 
-
-# Class ID 32 is 'sports ball' in standard COCO YOLO models. 
-# Change BALL_CLASS_ID to 0 if your weights (yolov8s.pt) are custom-trained specifically for basketballs.
 BALL_CLASS_ID = 32
 PERSON_CLASS_ID = 0
 
 def detect_objects_yolo(model: YOLO, image_frame, confidence_threshold: float = 0.25):
-    """
-    Runs YOLO inference on a single video frame to detect the ball AND players.
-    """
     results = model(image_frame, verbose=False)[0]
-    
     best_ball = None
     highest_conf_ball = 0.0
     players = []
@@ -30,20 +24,18 @@ def detect_objects_yolo(model: YOLO, image_frame, confidence_threshold: float = 
 
         if conf >= confidence_threshold:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
-            
-            if cls_id == BALL_CLASS_ID:
-                if conf > highest_conf_ball:
-                    highest_conf_ball = conf
-                    best_ball = Ball(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2)
-            
+            if cls_id == BALL_CLASS_ID and conf > highest_conf_ball:
+                highest_conf_ball = conf
+                best_ball = Ball(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2)
             elif cls_id == PERSON_CLASS_ID:
                 players.append(Player(confidence=conf, x1=x1, y1=y1, x2=x2, y2=y2))
 
     return best_ball, players
 
+
 def test_offline_estimation(input_video_path: str, output_video_path: str, model_path: str):
-    # Initialize YOLO Model
     model = YOLO(model_path)
+    lk_tracker = BallOpticalFlowTracker() # Initialize LK Optical Flow Tracker
 
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
@@ -57,17 +49,23 @@ def test_offline_estimation(input_video_path: str, output_video_path: str, model
 
     frames_metadata: List[Frame] = []
     
-    print(f"Pass 1: Scanning {total_frames} frames with YOLO model...")
+    print(f"Pass 1: Scanning {total_frames} frames with YOLO + Lucas-Kanade Flow...")
     frame_number = 0
+    
     while True:
         ret, image_frame = cap.read()
         if not ret:
             break
             
         timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-        
-        # Detect the balland players in the actual video frame
         ball, players = detect_objects_yolo(model, image_frame)
+        
+        if ball is not None:
+            # YOLO detected the ball -> Re-initialize optical flow feature points
+            lk_tracker.initialize(image_frame, ball)
+        else:
+            # YOLO missed the ball -> Use Lucas-Kanade Optical Flow
+            ball = lk_tracker.update(image_frame)
         
         frames_metadata.append(Frame(
             frame_number=frame_number,
@@ -76,16 +74,13 @@ def test_offline_estimation(input_video_path: str, output_video_path: str, model
             players=players
         ))
         frame_number += 1
-        
-        if frame_number % 50 == 0:
-            print(f"Scanned {frame_number}/{total_frames} frames...")
 
     cap.release()
 
-    print("Offline Processing: Interpolating missing ball frames...")
+    print("Offline Processing: Applying Kalman RTS Smoothing...")
     frames_metadata = estimate_missing_balls_offline(frames_metadata, max_gap_frames=45)
 
-    print("Pass 2: Rendering output video with bounding boxes...")
+    print("Pass 2: Rendering output video...")
     cap = cv2.VideoCapture(input_video_path)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
@@ -97,17 +92,12 @@ def test_offline_estimation(input_video_path: str, output_video_path: str, model
             break
             
         frame_obj = frames_metadata[frame_idx]
-        
         if frame_obj.ball is not None:
             b = frame_obj.ball
             x1, y1, x2, y2 = int(b.x1), int(b.y1), int(b.x2), int(b.y2)
             
-            if b.confidence > 0.0:
-                color = (0, 255, 0)  # Green for actual model detection
-                label = f"Detected: {b.confidence:.2f}"
-            else:
-                color = (0, 0, 255)  # Red for algorithm estimation
-                label = "Estimated"
+            color = (0, 255, 0) if b.confidence > 0.0 else (0, 0, 255)
+            label = f"Detected: {b.confidence:.2f}" if b.confidence > 0.0 else "Estimated"
                 
             cv2.rectangle(image_frame, (x1, y1), (x2, y2), color, 2)
             cv2.rectangle(image_frame, (x1, max(0, y1 - 20)), (x1 + 110, y1), color, -1)
@@ -124,9 +114,8 @@ def test_offline_estimation(input_video_path: str, output_video_path: str, model
 
 if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    
     input_path = os.path.join(script_dir, "test_vod2.mp4")
     output_path = os.path.join(script_dir, "output_interpolated.mp4")
-    weights_path = os.path.join(script_dir, "yolov8s.pt")  # or "yolo26s.pt"
+    weights_path = os.path.join(script_dir, "yolov8s.pt")
     
     test_offline_estimation(input_path, output_path, weights_path)
