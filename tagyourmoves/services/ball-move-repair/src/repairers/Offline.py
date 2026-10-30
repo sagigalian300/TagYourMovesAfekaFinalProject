@@ -11,8 +11,70 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
         return frames
 
     # =================================================================
-    # STEP 1: Extract data for the Kalman Filter
-    # (Player anchoring is removed; we rely on LK Flow + YOLO detections)
+    # STEP 1: Player Displacement Vector Tracking
+    # Move missing balls using the holding player's delta (dx, dy)
+    # =================================================================
+    last_player_pos = None
+    holding_player_ref = None
+
+    for f in frames:
+        if f.ball is not None:
+            bx = (f.ball.x1 + f.ball.x2) / 2
+            by = (f.ball.y1 + f.ball.y2) / 2
+            
+            holding_player_ref = None
+            last_player_pos = None
+            
+            # Check if ball is near/held by a player
+            for p in f.players:
+                if p.x1 - 20 <= bx <= p.x2 + 20 and p.y1 - 20 <= by <= p.y2 + 20:
+                    holding_player_ref = p
+                    px = (p.x1 + p.x2) / 2
+                    py = (p.y1 + p.y2) / 2
+                    last_player_pos = (px, py)
+                    break
+        else:
+            # Ball is missing (YOLO + LK failed)
+            if holding_player_ref is not None and last_player_pos is not None:
+                # Find the same player in the current frame (closest to last position)
+                best_dist = float('inf')
+                curr_player = None
+                
+                for p in f.players:
+                    px = (p.x1 + p.x2) / 2
+                    py = (p.y1 + p.y2) / 2
+                    dist = (px - last_player_pos[0])**2 + (py - last_player_pos[1])**2
+                    if dist < best_dist:
+                        best_dist = dist
+                        curr_player = p
+                
+                # Match found within reasonable threshold
+                if curr_player and best_dist < 12000:
+                    c_px = (curr_player.x1 + curr_player.x2) / 2
+                    c_py = (curr_player.y1 + curr_player.y2) / 2
+                    
+                    # Calculate player displacement vector (dx, dy)
+                    dx = c_px - last_player_pos[0]
+                    dy = c_py - last_player_pos[1]
+                    
+                    # Apply displacement to the previous frame's ball position
+                    prev_ball = frames[f.frame_number - 1].ball
+                    if prev_ball is not None:
+                        new_x1 = prev_ball.x1 + dx
+                        new_y1 = prev_ball.y1 + dy
+                        new_x2 = prev_ball.x2 + dx
+                        new_y2 = prev_ball.y2 + dy
+                        
+                        f.ball = Ball(confidence=0.0, x1=new_x1, y1=new_y1, x2=new_x2, y2=new_y2)
+                    
+                    last_player_pos = (c_px, c_py)
+                else:
+                    # Player was lost or left screen
+                    holding_player_ref = None
+                    last_player_pos = None
+
+    # =================================================================
+    # STEP 2: Extract Data for Kalman RTS Smoother
     # =================================================================
     data = []
     measurements = []
@@ -37,7 +99,7 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
         return frames
 
     # =================================================================
-    # STEP 2: Kalman Filter Forward Pass & RTS Backward Smoother
+    # STEP 3: Kalman Forward Pass & RTS Backward Smoother
     # =================================================================
     kf = KalmanFilter(dim_x=8, dim_z=4)
     dt = 1.0
@@ -71,12 +133,9 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
     for i, m in enumerate(measurements):
         kf.predict()
         if m is not None:
-            # DYNAMIC NOISE: 
-            # High trust for YOLO detections (noise = 5)
-            # Medium trust for Lucas-Kanade estimates (noise = 50) allows Kalman to smooth LK jitters
-            noise_level = 5.0 if confidences[i] > 0.0 else 50.0
+            # High trust for YOLO detections (noise=5), lower trust for estimated (noise=40)
+            noise_level = 5.0 if confidences[i] > 0.0 else 40.0
             kf.R = np.eye(4) * noise_level
-            
             kf.update(m)
         
         mu.append(kf.x.copy())
@@ -90,7 +149,7 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
     df['smooth_y2'] = M[:, 1, 0] + M[:, 3, 0] / 2
 
     # =================================================================
-    # STEP 3: Apply Smoothing and Bridge Complete Gaps
+    # STEP 4: Apply Smooth Coordinates to Frames
     # =================================================================
     missing = df['x1'].isna()
     gap_ids = (~missing).cumsum()
@@ -100,7 +159,6 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
     valid_gap_mask[missing] = gap_counts <= max_gap_frames
 
     for i, f in enumerate(frames):
-        # 1. Fill in pure gaps (where both YOLO and LK Tracker failed)
         if f.ball is None and valid_gap_mask.iloc[i]:
             row = df.iloc[i]
             x1 = max(0.0, float(row['smooth_x1']))
@@ -110,7 +168,6 @@ def estimate_missing_balls_offline(frames: List[Frame], max_gap_frames: int = 15
 
             f.ball = Ball(confidence=0.0, x1=x1, y1=y1, x2=x2, y2=y2)
             
-        # 2. Smooth out the Lucas-Kanade estimates
         elif f.ball is not None and f.ball.confidence == 0.0:
             row = df.iloc[i]
             f.ball.x1 = max(0.0, float(row['smooth_x1']))
