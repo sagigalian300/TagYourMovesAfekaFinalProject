@@ -15,14 +15,9 @@ from OpticalFlowTracker import BallOpticalFlowTracker # Import the LK Tracker
 from CameraMotion import estimate_camera_motion
 
 # Basketball-specific detector (classes: ball, human, rim).
-DEFAULT_MODEL = "basketball_yolov8n.onnx"
-DEFAULT_MODEL_URL = "https://huggingface.co/MTerryJack/Element-Detect-Basketball"
-DEFAULT_IMGSZ = 640  # the ONNX export only accepts its export size
 
-"""
-DEFAULT_MODEL = "yolov8s.pt"
+DEFAULT_MODEL = "yolo26s.pt"
 DEFAULT_IMGSZ = 1280
-"""
 
 
 # Classes are matched by name, so COCO models ('sports ball', 'person') and basketball
@@ -34,6 +29,15 @@ PLAYER_PATTERN = re.compile(r'[a-z]+_\d+')  # jersey / referee classes, e.g. 're
 
 
 def class_role(name: str) -> Optional[str]:
+    """
+    Maps a model's class name to the role it plays in the pipeline.
+
+    Args:
+        name (str): Class name from the model (case-insensitive), e.g. 'sports ball' or 'Red_23'.
+
+    Returns:
+        Optional[str]: 'ball', 'rim' or 'player', or None for classes the pipeline ignores.
+    """
     name = name.lower()
     if name in BALL_NAMES:
         return 'ball'
@@ -45,7 +49,21 @@ def class_role(name: str) -> Optional[str]:
 
 
 def detect_objects_yolo(model: YOLO, image_frame, confidence_threshold: float = 0.25, imgsz: Optional[int] = None):
-    results = model(image_frame, verbose=False, **({'imgsz': imgsz} if imgsz else {}))[0]
+    """
+    Runs the detector on one frame.
+
+    Args:
+        model (YOLO): The loaded detector.
+        image_frame (np.ndarray): The frame (BGR).
+        confidence_threshold (float, optional): Detections below this are ignored. Defaults to 0.25.
+        imgsz (Optional[int], optional): Inference resolution. None uses the model's default.
+            Defaults to None.
+
+    Returns:
+        Tuple[Optional[Ball], List[Player], List[Rim]]: The highest-confidence ball (or None),
+            all players and all rims.
+    """
+    results =model(image_frame, verbose=False, **({'imgsz': imgsz} if imgsz else {}))[0]
     best_ball = None
     highest_conf_ball = 0.0
     players = []
@@ -69,13 +87,32 @@ def detect_objects_yolo(model: YOLO, image_frame, confidence_threshold: float = 
 
 
 def default_cache_path(video_path: str, model_path: str, imgsz: Optional[int] = None) -> str:
-    model_name = os.path.splitext(os.path.basename(model_path))[0]
+    """
+    Builds the detection cache path, unique per video, model and inference size.
+
+    Args:
+        video_path (str): Path to the video.
+        model_path (str): Path to the detector weights.
+        imgsz (Optional[int], optional): Inference resolution, added to the name when given.
+            Defaults to None.
+
+    Returns:
+        str: e.g. 'test_vod2.yolo26s-1280.detections.json' next to the video.
+    """
+    model_name =os.path.splitext(os.path.basename(model_path))[0]
     if imgsz:
         model_name += f"-{imgsz}"
     return f"{os.path.splitext(video_path)[0]}.{model_name}.detections.json"
 
 
 def save_detections(frames: List[Frame], cache_path: str):
+    """
+    Saves the detections of every frame as JSON.
+
+    Args:
+        frames (List[Frame]): Frames to save (ball, players and rims).
+        cache_path (str): Output JSON path.
+    """
     data = []
     for f in frames:
         b = f.ball
@@ -91,7 +128,17 @@ def save_detections(frames: List[Frame], cache_path: str):
 
 
 def load_detections(cache_path: str) -> List[Frame]:
-    """Builds fresh Frame objects every call, so callers may mutate them freely."""
+    """
+    Loads detections saved by save_detections.
+
+    Builds fresh Frame objects every call, so callers may mutate them freely.
+
+    Args:
+        cache_path (str): JSON path written by save_detections.
+
+    Returns:
+        List[Frame]: Frames in video order.
+    """
     with open(cache_path) as fh:
         data = json.load(fh)
     return [Frame(
@@ -109,8 +156,20 @@ def detect_video(input_video_path: str, model_path: str, cache_path: Optional[st
     Pass 1: runs YOLO on every frame. Results are cached as JSON, so re-runs and the
     evaluation harness don't pay for inference again.
 
-    imgsz: inference resolution. The ball is small, so a COCO model gains from 1280
-    over its default 640; ONNX exports only accept the size they were exported with.
+    Args:
+        input_video_path (str): Path to the video.
+        model_path (str): Path to the detector weights (.pt, .onnx, ...).
+        cache_path (Optional[str], optional): JSON cache. Loaded if it exists, written otherwise.
+            None disables caching. Defaults to None.
+        imgsz (Optional[int], optional): Inference resolution. The ball is small, so a COCO model
+            gains from 1280 over its default 640; ONNX exports only accept the size they were
+            exported with. Defaults to None.
+
+    Returns:
+        List[Frame]: One Frame per video frame with its ball, players and rims.
+
+    Raises:
+        IOError: If the video can't be opened.
     """
     if cache_path and os.path.exists(cache_path):
         return load_detections(cache_path)
@@ -144,7 +203,19 @@ def detect_video(input_video_path: str, model_path: str, cache_path: Optional[st
 
 
 def camera_motion_for(input_video_path: str, frames: List[Frame], cache_path: Optional[str] = None) -> np.ndarray:
-    """Camera pan/zoom per frame (see CameraMotion.py). Depends only on the video and player boxes, so it is cached."""
+    """
+    Gets the camera motion per frame (see CameraMotion.py), cached since it only depends on
+    the video and the player boxes.
+
+    Args:
+        input_video_path (str): Path to the video.
+        frames (List[Frame]): Frames in video order; their player boxes are masked out.
+        cache_path (Optional[str], optional): .npy cache. Loaded if it exists, written otherwise.
+            None disables caching. Defaults to None.
+
+    Returns:
+        np.ndarray: (n, 2, 3) transforms from estimate_camera_motion.
+    """
     if cache_path and os.path.exists(cache_path):
         return np.load(cache_path)
     motion = estimate_camera_motion(input_video_path, frames)
@@ -154,6 +225,15 @@ def camera_motion_for(input_video_path: str, frames: List[Frame], cache_path: Op
 
 
 def default_camera_cache_path(video_path: str) -> str:
+    """
+    Builds the camera motion cache path for a video.
+
+    Args:
+        video_path (str): Path to the video.
+
+    Returns:
+        str: e.g. 'test_vod2.camera.npy' next to the video.
+    """
     return f"{os.path.splitext(video_path)[0]}.camera.npy"
 
 
@@ -161,6 +241,14 @@ def apply_optical_flow(input_video_path: str, frames: List[Frame], max_frames: i
     """
     Fills frames YOLO missed with short-range Lucas-Kanade hints (confidence 0.0).
     The offline estimator treats these as weak measurements, not anchors.
+
+    Args:
+        input_video_path (str): Path to the video.
+        frames (List[Frame]): Frames in video order. Modified in place.
+        max_frames (int, optional): Max consecutive frames to track after a detection. Defaults to 8.
+
+    Returns:
+        List[Frame]: The same frames, with hints where the tracker succeeded.
     """
     lk_tracker = BallOpticalFlowTracker(max_frames=max_frames)
     cap = cv2.VideoCapture(input_video_path)
@@ -182,7 +270,16 @@ def apply_optical_flow(input_video_path: str, frames: List[Frame], max_frames: i
 
 
 def render_video(input_video_path: str, frames: List[Frame], output_video_path: str):
-    cap = cv2.VideoCapture(input_video_path)
+    """
+    Writes a copy of the video with the ball drawn on it: green for detections,
+    red for estimates.
+
+    Args:
+        input_video_path (str): Path to the source video.
+        frames (List[Frame]): Frames in video order, with their final balls.
+        output_video_path (str): Path of the .mp4 to write.
+    """
+    cap =cv2.VideoCapture(input_video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -213,6 +310,15 @@ def render_video(input_video_path: str, frames: List[Frame], output_video_path: 
 
 
 def require_model(model_path: str):
+    """
+    Checks that the detector weights exist before running.
+
+    Args:
+        model_path (str): Path to the detector weights.
+
+    Raises:
+        FileNotFoundError: If the weights file is missing.
+    """
     if not os.path.exists(model_path):
         raise FileNotFoundError(
             f"Detector weights not found: {model_path}\n"
@@ -221,7 +327,17 @@ def require_model(model_path: str):
 
 
 def test_offline_estimation(input_video_path: str, output_video_path: str, model_path: str, imgsz: Optional[int] = None):
-    cache_path = default_cache_path(input_video_path, model_path, imgsz)
+    """
+    Runs the whole pipeline: detection, camera motion, optical-flow hints, offline estimation
+    and rendering.
+
+    Args:
+        input_video_path (str): Path to the video.
+        output_video_path (str): Path of the rendered .mp4.
+        model_path (str): Path to the detector weights.
+        imgsz (Optional[int], optional): Inference resolution. Defaults to None.
+    """
+    cache_path =default_cache_path(input_video_path, model_path, imgsz)
     if not os.path.exists(cache_path):
         require_model(model_path)
     frames_metadata = detect_video(input_video_path, model_path, cache_path, imgsz=imgsz)

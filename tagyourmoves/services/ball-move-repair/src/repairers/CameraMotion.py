@@ -14,8 +14,14 @@ def estimate_camera_motion(input_video_path: str, frames: List[Frame], scale: fl
     Chaining these gives, for every frame, a transform into the coordinates of frame 0, so motion
     measured there is the ball's own motion and not the camera's.
 
+    Args:
+        input_video_path (str): Path to the video.
+        frames (List[Frame]): Frames in video order; their player boxes are masked out.
+        scale (float, optional): Resolution factor used for tracking, for speed. Defaults to 0.5.
+
     Returns:
-        (n, 2, 3) array of affine matrices: [x_ref, y_ref] = M[i] @ [x, y, 1] for a point in frame i.
+        np.ndarray: (n, 2, 3) array of affine matrices: [x_ref, y_ref] = M[i] @ [x, y, 1] for
+            a point in frame i. Frames where the motion can't be estimated keep the previous transform.
     """
     n = len(frames)
     motion = np.tile(np.eye(3)[:2], (n, 1, 1))
@@ -50,7 +56,19 @@ def estimate_camera_motion(input_video_path: str, frames: List[Frame], scale: fl
 
 
 def _frame_to_frame(prev_gray: np.ndarray, gray: np.ndarray, prev_frame: Frame, scale: float):
-    """Similarity transform (3x3) mapping points of `gray` onto `prev_gray`, or None if it can't be estimated."""
+    """
+    Estimates the camera shift between two consecutive frames.
+
+    Args:
+        prev_gray (np.ndarray): Previous frame, grayscale, at reduced resolution.
+        gray (np.ndarray): Current frame, grayscale, at reduced resolution.
+        prev_frame (Frame): Detections of the previous frame; its player boxes are masked out.
+        scale (float): Factor between full and reduced resolution, used to scale the player boxes.
+
+    Returns:
+        Optional[np.ndarray]: 3x3 translation matrix mapping points of `gray` onto `prev_gray`
+            (reduced resolution), or None if too few background points could be tracked.
+    """
     mask = np.full_like(prev_gray, 255)
     for p in prev_frame.players:
         cv2.rectangle(mask, (int(p.x1 * scale), int(p.y1 * scale)), (int(p.x2 * scale), int(p.y2 * scale)), 0, -1)
@@ -79,11 +97,31 @@ def _frame_to_frame(prev_gray: np.ndarray, gray: np.ndarray, prev_frame: Frame, 
 
 
 def to_reference(motion: np.ndarray, i: int, points: np.ndarray) -> np.ndarray:
-    """Maps (k, 2) image points of frame i into reference coordinates."""
+    """
+    Maps image points of a frame into camera-stabilized reference coordinates.
+
+    Args:
+        motion (np.ndarray): (n, 2, 3) transforms from estimate_camera_motion.
+        i (int): Frame index the points belong to.
+        points (np.ndarray): (k, 2) points in the image coordinates of frame i.
+
+    Returns:
+        np.ndarray: (k, 2) points in reference coordinates.
+    """
     return points @ motion[i][:, :2].T + motion[i][:, 2]
 
 
 def from_reference(motion: np.ndarray, i: int, points: np.ndarray) -> np.ndarray:
-    """Maps (k, 2) reference points back into the image coordinates of frame i."""
+    """
+    Maps reference points back into the image coordinates of a frame (the inverse of to_reference).
+
+    Args:
+        motion (np.ndarray): (n, 2, 3) transforms from estimate_camera_motion.
+        i (int): Frame index to map into.
+        points (np.ndarray): (k, 2) points in reference coordinates.
+
+    Returns:
+        np.ndarray: (k, 2) points in the image coordinates of frame i.
+    """
     A, t = motion[i][:, :2], motion[i][:, 2]
     return (points - t) @ np.linalg.inv(A).T

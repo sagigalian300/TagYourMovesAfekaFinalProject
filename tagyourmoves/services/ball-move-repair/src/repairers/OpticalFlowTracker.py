@@ -6,16 +6,27 @@ class BallOpticalFlowTracker:
     """
     Short-range Lucas-Kanade tracker that bridges a few frames after YOLO loses the ball.
     Its output is a weak hint (confidence 0.0); the offline estimator decides how much to trust it.
+
+    Attributes:
+        prev_gray (Optional[np.ndarray]): Last grayscale frame, or None when not tracking.
+        p0 (Optional[np.ndarray]): Feature points being tracked, shaped (k, 1, 2).
+        last_ball (Optional[Ball]): Last known or estimated ball box.
+        frames_tracked (int): Consecutive frames estimated since the last detection.
     """
 
     def __init__(self, max_frames: int = 8, fb_threshold: float = 1.0, inner_radius_ratio: float = 0.7):
         """
+        Initializes the tracker.
+
         Args:
-            max_frames: Stop tracking after this many consecutive frames without a detection.
-                LK drifts quickly on a low-texture ball, so long chains do more harm than good.
-            fb_threshold: Max forward-backward error (px) for a point to count as reliably tracked.
-            inner_radius_ratio: Features are only taken from a circle of this fraction of the
-                ball radius, so corners of the background inside the bounding box are ignored.
+            max_frames (int, optional): Stop tracking after this many consecutive frames without
+                a detection. LK drifts quickly on a low-texture ball, so long chains do more harm
+                than good. Defaults to 8.
+            fb_threshold (float, optional): Max forward-backward error (px) for a point to count
+                as reliably tracked. Defaults to 1.0.
+            inner_radius_ratio (float, optional): Features are only taken from a circle of this
+                fraction of the ball radius, so corners of the background inside the bounding box
+                are ignored. Defaults to 0.7.
         """
         # Shi-Tomasi Corner Detector Parameters
         self.feature_params = dict(
@@ -40,6 +51,13 @@ class BallOpticalFlowTracker:
     def initialize(self, frame_bgr, ball: Ball) -> bool:
         """
         Called when YOLO detects the ball. Extracts feature points inside the ball itself.
+
+        Args:
+            frame_bgr (np.ndarray): The current frame (BGR).
+            ball (Ball): The detected ball in this frame.
+
+        Returns:
+            bool: True if at least 2 feature points were found; otherwise the tracker is reset.
         """
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -66,6 +84,13 @@ class BallOpticalFlowTracker:
     def update(self, frame_bgr) -> Ball | None:
         """
         Called when YOLO misses the ball. Calculates Lucas-Kanade flow to predict displacement.
+
+        Args:
+            frame_bgr (np.ndarray): The current frame (BGR).
+
+        Returns:
+            Ball | None: The shifted ball box with confidence 0.0, or None if the tracker isn't
+                initialized, ran past max_frames, or lost its feature points.
         """
         if self.prev_gray is None or self.p0 is None or len(self.p0) == 0:
             return None
@@ -117,6 +142,7 @@ class BallOpticalFlowTracker:
         return estimated_ball
 
     def reset(self):
+        """Clears the tracking state, so update() returns None until the next initialize()."""
         self.prev_gray = None
         self.p0 = None
         self.last_ball = None

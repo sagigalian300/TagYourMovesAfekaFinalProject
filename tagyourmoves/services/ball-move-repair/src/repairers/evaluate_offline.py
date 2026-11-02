@@ -26,6 +26,13 @@ from test_offline import (detect_video, load_detections, apply_optical_flow, def
 
 @dataclass
 class VideoInfo:
+    """
+    Video-level data an estimator needs besides the frames.
+
+    Attributes:
+        frame_size (Tuple[int, int]): (width, height) of the video.
+        camera_motion (Optional[np.ndarray]): (n, 2, 3) transforms from estimate_camera_motion.
+    """
     frame_size: Tuple[int, int]
     camera_motion: Optional[np.ndarray]
 
@@ -37,6 +44,15 @@ GAP_BUCKETS = [(3, 7), (8, 15), (16, 30), (31, 45)]
 
 
 def _center_and_size(ball) -> Tuple[float, float, float]:
+    """
+    Gets a ball box's center and diameter.
+
+    Args:
+        ball (Ball): The ball box.
+
+    Returns:
+        Tuple[float, float, float]: (center x, center y, mean of width and height).
+    """
     return (ball.x1 + ball.x2) / 2, (ball.y1 + ball.y2) / 2, ((ball.x2 - ball.x1) + (ball.y2 - ball.y1)) / 2
 
 
@@ -55,6 +71,21 @@ def sample_masks(
     at least `min_gt_ratio` of its frames have a confident detection to score against, and all
     those detections form one continuous track. YOLO's ball class also fires on other objects,
     and scoring against those would make the ground truth itself wrong.
+
+    Args:
+        frames (List[Frame]): Frames with all detections present.
+        rng (random.Random): Random generator, so trials are reproducible.
+        gap_range (Tuple[int, int], optional): Min and max window length. Defaults to (3, 30).
+        min_gt_conf (float, optional): Min confidence for a detection to be scored against.
+            Defaults to 0.4.
+        min_gt_ratio (float, optional): Min share of window frames with such a detection.
+            Defaults to 0.6.
+        spacing (int, optional): Min frames between windows, so each keeps its own anchors.
+            Defaults to 10.
+        masks_per_100_frames (float, optional): How many windows to aim for. Defaults to 2.0.
+
+    Returns:
+        List[Tuple[int, int]]: Sorted (start, end) windows; end is exclusive.
     """
     n = len(frames)
     confident = np.array([f.ball is not None and f.ball.confidence >= min_gt_conf for f in frames])
@@ -88,7 +119,20 @@ def sample_masks(
 
 def _is_continuous_track(frames: List[Frame], first: int, last: int,
                          max_speed: float = 2.5, max_size_ratio: float = 1.5) -> bool:
-    """Whether the detections in frames[first..last] plausibly belong to one moving ball."""
+    """
+    Checks whether the detections in frames[first..last] plausibly belong to one moving ball.
+
+    Args:
+        frames (List[Frame]): Frames in video order.
+        first (int): First frame index (inclusive).
+        last (int): Last frame index (inclusive).
+        max_speed (float, optional): Max motion between frames, in ball diameters. Defaults to 2.5.
+        max_size_ratio (float, optional): Max size change between consecutive detections.
+            Defaults to 1.5.
+
+    Returns:
+        bool: True if every consecutive pair has a plausible speed and size.
+    """
     dets = [(i, _center_and_size(frames[i].ball)) for i in range(first, last + 1) if frames[i].ball is not None]
     for (i, (x1, y1, s1)), (j, (x2, y2, s2)) in zip(dets[:-1], dets[1:]):
         if max(s1, s2) / max(min(s1, s2), 1.0) > max_size_ratio:
@@ -108,6 +152,23 @@ def run_trial(
     gap_range: Tuple[int, int],
     min_gt_conf: float,
 ) -> List[Dict]:
+    """
+    Runs one trial: hides random windows of detections, runs the pipeline, and scores it.
+
+    Args:
+        video_path (str): Path to the video (needed by the optical-flow pass).
+        cache_path (str): Detection cache to load fresh frames from.
+        estimator (Estimator): The estimator under test.
+        hint_pass (Optional[HintPass]): Optical-flow pass to run before the estimator, or None.
+        rng (random.Random): Random generator for picking the windows.
+        info (VideoInfo): Frame size and camera motion for the estimator.
+        gap_range (Tuple[int, int]): Min and max hidden window length.
+        min_gt_conf (float): Min confidence for a hidden detection to be scored against.
+
+    Returns:
+        List[Dict]: One entry per scored frame: 'gap' (window length), 'err' (center error in px,
+            None if nothing was estimated) and 'size' (true ball diameter).
+    """
     frames = load_detections(cache_path)
     masks = sample_masks(frames, rng, gap_range=gap_range, min_gt_conf=min_gt_conf)
 
@@ -135,6 +196,16 @@ def run_trial(
 
 
 def summarize(results: List[Dict]) -> Dict:
+    """
+    Aggregates per-frame results into summary metrics.
+
+    Args:
+        results (List[Dict]): Entries from run_trial.
+
+    Returns:
+        Dict: 'n', 'coverage', 'mean_px', 'median_px', 'p90_px' and 'within_1d'
+            (share of all hidden frames estimated within one ball diameter). Only 'n' when empty.
+    """
     if not results:
         return {'n': 0}
     filled = [r for r in results if r['err'] is not None]
@@ -152,6 +223,16 @@ def summarize(results: List[Dict]) -> Dict:
 
 
 def format_summary(name: str, s: Dict) -> str:
+    """
+    Formats a summary as one printable line.
+
+    Args:
+        name (str): Row label, e.g. 'gap 3-7'.
+        s (Dict): Output of summarize.
+
+    Returns:
+        str: The formatted line.
+    """
     if s['n'] == 0:
         return f"{name:<14} n=0"
     return (f"{name:<14} n={s['n']:<5} coverage={s['coverage']:6.1%}  mean={s['mean_px']:6.1f}px  "
@@ -170,7 +251,27 @@ def evaluate(
     verbose: bool = True,
     imgsz: Optional[int] = None,
 ) -> Dict:
-    cache_path = default_cache_path(video_path, model_path, imgsz)
+    """
+    Evaluates an estimator on one video over several random trials.
+
+    Args:
+        video_path (str): Path to the video.
+        model_path (str): Path to the detector weights (detections are cached).
+        estimator (Estimator): The estimator under test.
+        hint_pass (Optional[HintPass], optional): Optical-flow pass to run first, or None to skip.
+            Defaults to apply_optical_flow.
+        trials (int, optional): Number of trials. Defaults to 5.
+        seed (int, optional): Base random seed. Defaults to 0.
+        gap_range (Tuple[int, int], optional): Min and max hidden window length. Defaults to (3, 30).
+        min_gt_conf (float, optional): Min confidence for a hidden detection to be scored against.
+            Defaults to 0.4.
+        verbose (bool, optional): Print the summary per gap length. Defaults to True.
+        imgsz (Optional[int], optional): Detector inference resolution. Defaults to None.
+
+    Returns:
+        Dict: 'overall' (output of summarize) and 'results' (all per-frame entries).
+    """
+    cache_path =default_cache_path(video_path, model_path, imgsz)
     frames = detect_video(video_path, model_path, cache_path, imgsz=imgsz)
 
     cap = cv2.VideoCapture(video_path)
@@ -196,6 +297,17 @@ def evaluate(
 
 
 def default_estimator(max_gap_frames: int = 45, **options) -> Estimator:
+    """
+    Wraps estimate_missing_balls_offline as an Estimator.
+
+    Args:
+        max_gap_frames (int, optional): Longest gap that is filled. Defaults to 45.
+        **options: Extra keyword arguments for estimate_missing_balls_offline,
+            e.g. use_possession=False.
+
+    Returns:
+        Estimator: Function taking (frames, VideoInfo) and returning the estimated frames.
+    """
     return lambda frames, info: estimate_missing_balls_offline(
         frames, max_gap_frames=max_gap_frames, frame_size=info.frame_size, camera_motion=info.camera_motion, **options
     )

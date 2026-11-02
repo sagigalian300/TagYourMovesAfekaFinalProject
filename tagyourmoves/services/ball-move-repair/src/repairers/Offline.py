@@ -45,12 +45,21 @@ def estimate_missing_balls_offline(
     Gaps longer than `max_gap_frames` are left empty apart from a short stretch near each end.
 
     Args:
-        frames: Frames in video order.
-        max_gap_frames: Longest gap that is filled end to end.
-        frame_size: (width, height); when given, estimates are clamped inside the frame.
-        camera_motion: Per-frame transforms from CameraMotion.estimate_camera_motion. When given,
-            ball motion is modelled in camera-stabilized coordinates, so pans don't look like ball motion.
-        use_possession / use_hints: Switch individual stages off (for evaluation).
+        frames (List[Frame]): Frames in video order. Modified in place.
+        max_gap_frames (int, optional): Longest gap that is filled end to end. Defaults to 15.
+        frame_size (Optional[Tuple[int, int]], optional): (width, height) of the video. When given,
+            estimates are clamped inside the frame. Defaults to None.
+        camera_motion (Optional[np.ndarray], optional): Per-frame transforms from
+            CameraMotion.estimate_camera_motion. When given, ball motion is modelled in
+            camera-stabilized coordinates, so pans don't look like ball motion. Defaults to None.
+        use_possession (bool, optional): Fill gaps by following the player holding the ball.
+            Switch off for evaluation. Defaults to True.
+        use_hints (bool, optional): Feed optical-flow hints into the Kalman smoother.
+            Switch off for evaluation. Defaults to True.
+
+    Returns:
+        List[Frame]: The same frames, with estimated balls (confidence 0.0) in the gaps and
+            rejected detections removed.
     """
     n = len(frames)
     if n == 0:
@@ -124,10 +133,26 @@ def estimate_missing_balls_offline(
     estimates: Dict[int, np.ndarray] = {}
 
     def owner(i: int) -> Optional[int]:
+        """
+        Finds the player holding the ball in frame i.
+
+        Args:
+            i (int): Frame index; must hold a ball center.
+
+        Returns:
+            Optional[int]: Player track id, or None if nobody holds it or possession is off.
+        """
         return players.owner(i, centers[i], diameters[i]) if players is not None else None
 
     def follow_owner(anchor: int, frame_range: range):
-        # One-sided gap: keep the ball at a fixed spot relative to whoever held it
+        """
+        Fills a one-sided gap by keeping the ball at a fixed spot relative to whoever held it.
+
+        Args:
+            anchor (int): Frame of the known detection next to the gap.
+            frame_range (range): Frames to fill, walking away from the anchor. Stops early
+                if the player's track ends.
+        """
         tid = owner(anchor)
         if tid is None:
             return
@@ -191,6 +216,8 @@ def _select_ball_track(
     max_gap_frames: int,
 ) -> np.ndarray:
     """
+    Selects the detections that belong to the real ball's track.
+
     YOLO's ball class also fires on other objects, sometimes for many frames in a row, so not
     every detection is the ball.
       1. Split detections into tracklets: runs whose consecutive detections are physically
@@ -198,10 +225,30 @@ def _select_ball_track(
       2. Pick the chain of tracklets with the highest total confidence in which every jump between
          consecutive tracklets is also physically possible (longest path in a DAG, by dynamic
          programming). After a gap longer than max_gap_frames anything is possible.
+
+    Args:
+        centers (np.ndarray): (n, 2) ball centers per frame, NaN where there is none.
+        sizes (np.ndarray): (n, 2) ball box width/height per frame, NaN where there is none.
+        confidences (np.ndarray): (n,) detection confidence per frame.
+        detections (np.ndarray): Sorted indices of the frames holding a detection. Must not be empty.
+        max_gap_frames (int): Gap length after which any jump between detections is allowed.
+
+    Returns:
+        np.ndarray: Sorted frame indices of the accepted detections (the anchors).
     """
     diameters = sizes.mean(axis=1)
 
     def consistent(i: int, j: int) -> bool:
+        """
+        Checks whether the detections in frames i and j can be the same ball.
+
+        Args:
+            i (int): Frame index of the first detection.
+            j (int): Frame index of the second detection.
+
+        Returns:
+            bool: True if their sizes are similar and the distance fits the time between them.
+        """
         if max(diameters[i], diameters[j]) / min(diameters[i], diameters[j]) > MAX_SIZE_RATIO:
             return False
         diameter = (diameters[i] + diameters[j]) / 2
@@ -242,9 +289,21 @@ def _kalman_smooth(
     max_gap_frames: int,
 ) -> np.ndarray:
     """
-    Constant-velocity Kalman filter + RTS smoother over the ball center. Runs separately on each
-    segment of the video (segments are split at gaps longer than max_gap_frames) so no velocity
-    is carried across a long gap. Returns an (n, 2) array, NaN outside the segments.
+    Smooths the ball center with a constant-velocity Kalman filter and an RTS smoother.
+
+    Runs separately on each segment of the video (segments are split at gaps longer than
+    max_gap_frames) so no velocity is carried across a long gap.
+
+    Args:
+        n (int): Number of frames in the video.
+        anchors (np.ndarray): Sorted frame indices of the accepted detections.
+        hints (np.ndarray): Frame indices of optical-flow hints to use as weak measurements.
+        centers (np.ndarray): (n, 2) ball centers per frame (camera-stabilized when available).
+        diameters (np.ndarray): (n,) ball diameter per frame, used to scale the noise.
+        max_gap_frames (int): Gaps longer than this split the video into separate segments.
+
+    Returns:
+        np.ndarray: (n, 2) smoothed centers, NaN outside the segments.
     """
     out = np.full((n, 2), np.nan)
     is_anchor = np.zeros(n, dtype=bool)
@@ -290,7 +349,16 @@ def _kalman_smooth(
 
 
 def _linear_residual(t: np.ndarray, points: np.ndarray) -> float:
-    """RMS distance of points from the best constant-velocity line through them."""
+    """
+    Measures how far points are from moving at constant velocity.
+
+    Args:
+        t (np.ndarray): (k,) frame times of the points. Needs at least 2 distinct values.
+        points (np.ndarray): (k, 2) positions.
+
+    Returns:
+        float: RMS distance of the points from the best-fitting straight-line motion.
+    """
     fit = np.stack([np.polyval(np.polyfit(t, points[:, c], 1), t) for c in range(2)], axis=1)
     return float(np.sqrt(np.mean(np.sum((fit - points) ** 2, axis=1))))
 
@@ -299,9 +367,20 @@ class _PlayerTracks:
     """
     Links player boxes across frames by IoU (Hungarian matching) and smooths each track.
     Kept internal so the Player objects themselves are not modified.
+
+    Attributes:
+        tracks (List[Tuple[int, np.ndarray]]): Per track id: (first frame, (k, 4) smoothed boxes
+            for consecutive frames from there).
+        present (Dict[int, List[int]]): Per frame: ids of the tracks with a real detection in it.
     """
 
     def __init__(self, frames: List[Frame]):
+        """
+        Builds the player tracks.
+
+        Args:
+            frames (List[Frame]): Frames in video order; only their players are read.
+        """
         raw: List[Dict[int, np.ndarray]] = []
         active: List[int] = []  # indices into raw
 
@@ -344,13 +423,33 @@ class _PlayerTracks:
                 self.present.setdefault(int(i), []).append(tid)
 
     def box(self, tid: int, i: int) -> Optional[np.ndarray]:
+        """
+        Gets a player's smoothed box in a frame.
+
+        Args:
+            tid (int): Player track id.
+            i (int): Frame index.
+
+        Returns:
+            Optional[np.ndarray]: [x1, y1, x2, y2], or None if the track doesn't cover frame i.
+        """
         start, boxes = self.tracks[tid]
         if start <= i < start + len(boxes):
             return boxes[i - start]
         return None
 
     def owner(self, i: int, center: np.ndarray, diameter: float) -> Optional[int]:
-        """The player holding the ball in frame i: the closest box (relative to its size) that contains it."""
+        """
+        Finds the player holding the ball: the closest box (relative to its size) that contains it.
+
+        Args:
+            i (int): Frame index.
+            center (np.ndarray): Ball center [x, y] in image coordinates.
+            diameter (float): Ball diameter, which sets how far outside a box still counts.
+
+        Returns:
+            Optional[int]: Track id of the holder, or None if no player box contains the ball.
+        """
         best, best_score = None, np.inf
         for tid in self.present.get(i, []):
             x1, y1, x2, y2 = self.box(tid, i)
@@ -364,9 +463,20 @@ class _PlayerTracks:
 
     def moves_with(self, tid: int, idx: np.ndarray, centers: np.ndarray, stable: np.ndarray) -> bool:
         """
-        Whether the ball moves with the player around a gap: its path relative to the player's box
-        is steadier than its own (camera-stabilized) path, which is what the Kalman smoother assumes.
-        With fewer than 3 detections there's nothing to compare, so the answer is no.
+        Checks whether the ball moves with the player around a gap.
+
+        It does when its path relative to the player's box is steadier than its own
+        (camera-stabilized) path, which is what the Kalman smoother assumes.
+
+        Args:
+            tid (int): Player track id.
+            idx (np.ndarray): Frame indices of the detections around the gap.
+            centers (np.ndarray): (n, 2) ball centers in image coordinates.
+            stable (np.ndarray): (n, 2) ball centers in camera-stabilized coordinates.
+
+        Returns:
+            bool: True if the ball follows the player. False with fewer than 3 usable
+                detections, since there's nothing to compare.
         """
         idx = np.array([i for i in idx if self.box(tid, i) is not None])
         if len(idx) < 3:
@@ -377,10 +487,33 @@ class _PlayerTracks:
         return _linear_residual(t, centers[idx] - box_centers) < _linear_residual(t, stable[idx])
 
     def relative(self, tid: int, i: int, center: np.ndarray) -> np.ndarray:
+        """
+        Expresses a point relative to a player's box.
+
+        Args:
+            tid (int): Player track id; its track must cover frame i.
+            i (int): Frame index.
+            center (np.ndarray): Point [x, y] in image coordinates.
+
+        Returns:
+            np.ndarray: [u, v] where (0, 0) is the box's top-left and (1, 1) its bottom-right.
+        """
         x1, y1, x2, y2 = self.box(tid, i)
         return np.array([(center[0] - x1) / (x2 - x1), (center[1] - y1) / (y2 - y1)])
 
     def absolute(self, tid: int, i: int, offset: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Converts a box-relative offset back to image coordinates (the inverse of `relative`).
+
+        Args:
+            tid (int): Player track id.
+            i (int): Frame index.
+            offset (np.ndarray): [u, v] relative to the player's box.
+
+        Returns:
+            Optional[np.ndarray]: Point [x, y] in image coordinates, or None if the track
+                doesn't cover frame i.
+        """
         box = self.box(tid, i)
         if box is None:
             return None
@@ -388,7 +521,20 @@ class _PlayerTracks:
         return np.array([x1 + offset[0] * (x2 - x1), y1 + offset[1] * (y2 - y1)])
 
     def interpolate(self, tid: int, a: int, b: int, center_a: np.ndarray, center_b: np.ndarray) -> Optional[np.ndarray]:
-        """Moves the ball with the player, blending its offset inside the player's box from a to b."""
+        """
+        Moves the ball with the player, blending its offset inside the player's box from a to b.
+
+        Args:
+            tid (int): Track id of the player holding the ball.
+            a (int): Frame of the detection before the gap.
+            b (int): Frame of the detection after the gap.
+            center_a (np.ndarray): Ball center [x, y] at frame a.
+            center_b (np.ndarray): Ball center [x, y] at frame b.
+
+        Returns:
+            Optional[np.ndarray]: (b - a - 1, 2) ball centers for the gap frames, or None if
+                the player's track doesn't cover the whole gap.
+        """
         offset_a = self.relative(tid, a, center_a)
         offset_b = self.relative(tid, b, center_b)
         path = []
@@ -402,7 +548,17 @@ class _PlayerTracks:
 
 
 def _iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    x1 = np.maximum(a[:, None, 0], b[None, :, 0])
+    """
+    Computes the intersection-over-union of every pair of boxes.
+
+    Args:
+        a (np.ndarray): (m, 4) boxes as [x1, y1, x2, y2].
+        b (np.ndarray): (k, 4) boxes as [x1, y1, x2, y2].
+
+    Returns:
+        np.ndarray: (m, k) IoU values between 0 and 1.
+    """
+    x1 =np.maximum(a[:, None, 0], b[None, :, 0])
     y1 = np.maximum(a[:, None, 1], b[None, :, 1])
     x2 = np.minimum(a[:, None, 2], b[None, :, 2])
     y2 = np.minimum(a[:, None, 3], b[None, :, 3])
@@ -413,13 +569,38 @@ def _iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def _interpolate_sizes(n: int, anchors: np.ndarray, sizes: np.ndarray) -> np.ndarray:
-    """Box width/height for every frame: linear between anchors, using a short median to remove detection jitter."""
+    """
+    Computes a ball box size for every frame.
+
+    Sizes are linear between anchors, using a short median over neighbouring anchors to
+    remove detection jitter.
+
+    Args:
+        n (int): Number of frames in the video.
+        anchors (np.ndarray): Sorted frame indices of the accepted detections.
+        sizes (np.ndarray): (n, 2) box width/height per frame.
+
+    Returns:
+        np.ndarray: (n, 2) box width/height for every frame.
+    """
     smoothed = np.array([np.median(sizes[anchors[max(0, k - 1):k + 2]], axis=0) for k in range(len(anchors))])
     frame_idx = np.arange(n)
     return np.stack([np.interp(frame_idx, anchors, smoothed[:, c]) for c in range(2)], axis=1)
 
 
 def _make_ball(center: np.ndarray, size: np.ndarray, frame_size: Optional[Tuple[int, int]]) -> Ball:
+    """
+    Builds an estimated Ball from a center and box size.
+
+    Args:
+        center (np.ndarray): Ball center [x, y] in image coordinates.
+        size (np.ndarray): Box [width, height].
+        frame_size (Optional[Tuple[int, int]]): (width, height) of the video. When given, the
+            center and box are clamped inside the frame.
+
+    Returns:
+        Ball: The estimate, with confidence 0.0 to mark it as not detected.
+    """
     cx, cy = float(center[0]), float(center[1])
     w, h = float(size[0]), float(size[1])
     if frame_size is not None:
