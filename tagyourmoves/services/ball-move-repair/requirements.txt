@@ -1,6 +1,7 @@
+fastapi
+uvicorn
+python-multipart
 scipy
 numpy
-ultralytics
 opencv-python
 filterpy
-onnxruntime
