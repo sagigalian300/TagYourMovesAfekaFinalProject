@@ -1,11 +1,8 @@
 # Docker will install a slim linux OS with python 3.10 on it.
 FROM python:3.10-slim
 
-# RUN command will run the followed command in the VM terminal (in this example it is the dependencies for the OpenCV library, and clean right after)
-RUN apt-get update && apt-get install -y \
-    libgl1 \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+# No system packages are installed: requirements.txt uses opencv-python-headless, which doesn't
+# need the GUI libraries (libgl1, ...) that the full opencv-python requires, keeping the image small.
 
 # Tells docker to work within the folder app that will be created
 WORKDIR /app

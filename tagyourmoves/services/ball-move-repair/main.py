@@ -103,7 +103,7 @@ async def health_endpoint():
 
 @app.post("/repair-ball")
 async def repair_ball_endpoint(
-    frames_data: str = Form(...),
+    frames_data: UploadFile = File(...),
     video: Optional[UploadFile] = File(None),
     frame_width: Optional[int] = Form(None),
     frame_height: Optional[int] = Form(None),
@@ -112,12 +112,14 @@ async def repair_ball_endpoint(
 ):
     """Endpoint to estimate the ball in every frame where it is missing.
 
-    Accepts multipart/form-data with the frames as a JSON string and, optionally, the video
+    Accepts multipart/form-data with the frames as a JSON file and, optionally, the video
     they came from. Without the video only the detections are used; with it, camera motion
     is compensated (important for a moving camera) and optical-flow hints are added.
 
     Args:
-        frames_data (str): JSON list of every Frame of the video, in any order.
+        frames_data (UploadFile): JSON file holding a list of every Frame of the video, in
+            any order. Sent as a file rather than a text field because text fields are capped
+            at 1 MB, which a frame list passes after about 600 frames.
         video (Optional[UploadFile]): The video file. Its first frame must be frame_number 0.
         frame_width (Optional[int]): Video width, to keep estimates inside the frame when no
             video is sent.
@@ -133,8 +135,10 @@ async def repair_ball_endpoint(
         HTTPException: If the frames JSON is invalid, or the video can't be read or doesn't
             start at frame 0.
     """
+    # Starlette caps text form fields at 1 MB and FastAPI offers no way to raise it, while file
+    # parts are spooled to disk with no cap, so the frame list must arrive as a file
     try:
-        frames = parse_frames(frames_data)
+        frames = parse_frames((await frames_data.read()).decode("utf-8"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid frames JSON data: {e}")
 

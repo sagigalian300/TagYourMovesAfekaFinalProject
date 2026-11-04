@@ -3,5 +3,5 @@ uvicorn
 python-multipart
 scipy
 numpy
-opencv-python
+opencv-python-headless
 filterpy

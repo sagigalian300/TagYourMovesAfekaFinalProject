@@ -1,5 +1,15 @@
 # Only for the local scripts (test_offline.py, evaluate_offline.py), which run YOLO themselves.
-# The service in main.py receives detections and doesn't need these.
--r requirements.txt
+# The service in main.py receives detections and only needs requirements.txt.
+#
+# This repeats the service packages instead of using "-r requirements.txt" because the service
+# uses opencv-python-headless while ultralytics depends on the full opencv-python, and having
+# both installed breaks cv2 (they overwrite each other's files).
+fastapi
+uvicorn
+python-multipart
+scipy
+numpy
+opencv-python
+filterpy
 ultralytics
 onnxruntime

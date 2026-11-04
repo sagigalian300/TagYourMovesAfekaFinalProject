@@ -14,8 +14,9 @@ from Offline import estimate_missing_balls_offline
 from CameraMotion import estimate_camera_motion
 from pipeline import apply_optical_flow, render_video  # also imported from here by evaluate_offline.py
 
-# Basketball-specific detector (classes: ball, human, rim).
-
+# Detector used by the local test scripts. Any Ultralytics model works, since classes are
+# matched by name below. 1280 instead of the default 640 because the ball is small: at 640 a
+# 1080p ball shrinks to ~17px and is missed far more often.
 DEFAULT_MODEL = "yolo26s.pt"
 DEFAULT_IMGSZ = 1280
 
@@ -247,10 +248,12 @@ def require_model(model_path: str):
     Raises:
         FileNotFoundError: If the weights file is missing.
     """
+    # Fail early with a clear message; otherwise Ultralytics may try to download a model of
+    # the same name or fail deep inside loading
     if not os.path.exists(model_path):
         raise FileNotFoundError(
             f"Detector weights not found: {model_path}\n"
-            f"Download weights.onnx from {DEFAULT_MODEL_URL} and save it as {DEFAULT_MODEL}"
+            f"Put the weights file next to test_offline.py or change DEFAULT_MODEL"
         )
 
 
