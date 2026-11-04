@@ -62,8 +62,9 @@ repaired frames
    - **Possession:** if the same player holds the ball on both sides *and* the ball has been
      moving with that player, the ball follows the player's box.
    - **Otherwise** the Kalman path is used.
-   - Gaps longer than `max_gap_frames` (default 45) are left empty, apart from following the
-     holding player for up to 10 frames at each end.
+   - Gaps longer than `max_gap_frames` (default 45) are left mostly empty. The only exceptions
+     are following the holding player for up to 10 frames at each end, and the optical-flow
+     hints near the ends when the video was sent.
 
 Estimates are marked with **`confidence: 0.0`**; real detections keep their detector confidence.
 
@@ -358,7 +359,7 @@ These values were tuned with `evaluate_offline.py` on two test videos. Re-run it
 - **Inside a gap the path is smooth.** A bounce, dribble or catch that happens entirely while
   the ball is hidden isn't reproduced.
 - **Long gaps stay mostly empty.** Gaps over `max_gap_frames` are only filled near their ends,
-  when a player holds the ball.
+  when a player holds the ball or optical flow could follow it.
 - **Package versions aren't pinned.** A Docker build may install newer versions than the ones
   tested locally (e.g. OpenCV 5 instead of 4.13), which shifts results slightly.
 
