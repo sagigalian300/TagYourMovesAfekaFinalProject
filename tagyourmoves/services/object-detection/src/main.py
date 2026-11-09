@@ -11,6 +11,7 @@ import numpy as np
 from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.detector import ObjectDetector
 from src.visualization import draw_detections_on_image
@@ -46,6 +47,14 @@ async def lifespan(app: FastAPI):
     shared_resources.clear()
 
 app = FastAPI(title="Object Detection Microservice", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/detect")
 async def detect_objects_endpoint(
