@@ -1,7 +1,7 @@
 from typing import List, Optional
-from contract.ball.Ball import Ball
-from contract.rim.Rim import Rim
-from contract.player.Player import Player
+from contracts.ball.Ball import Ball
+from contracts.rim.Rim import Rim
+from contracts.player.Player import Player
 
 class Frame:
     """
