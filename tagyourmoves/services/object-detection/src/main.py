@@ -8,20 +8,17 @@ detection to find players, rims, and the ball, and returns a structured Frame.
 import os
 import cv2
 import numpy as np
-from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.detector import ObjectDetector
-from src.visualization import draw_detections_on_image
 
 # Global dictionary to hold the AI model in memory
 shared_resources = {}
 
 # Constants
 MODEL_PATH = os.path.join("src", "detectors", "yolo26s.pt")
-DEBUG_DIR = os.path.join("mock", "debug_outputs")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -92,12 +89,5 @@ async def detect_objects_endpoint(
 
     # Run detection
     detected_frame = detector.detect(img, frame_number, timestamp_ms)
-
-    # Save debug visualization
-    os.makedirs(DEBUG_DIR, exist_ok=True)
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    debug_path = os.path.join(DEBUG_DIR, f"detection_frame_{frame_number}_{timestamp_str}.png")
-    
-    draw_detections_on_image(img.copy(), detected_frame, debug_path)
 
     return detected_frame
