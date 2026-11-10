@@ -2,6 +2,7 @@
 Module for object detection using YOLO.
 """
 
+import torch
 from typing import List
 import numpy as np
 from ultralytics import YOLO
@@ -30,6 +31,13 @@ class ObjectDetector:
             model_path (str): The file path to the YOLO model weights (.pt file).
         """
         self.model = YOLO(model_path)
+
+        # check device
+        if torch.cuda.is_available():
+            self.model.to('cuda')
+            print(f"\n[Device Check] SUCCESS! YOLO is now forced on: {self.model.device}\n")
+        else:
+            print("\n[Device Check] ERROR: PyTorch does NOT see the GPU (CUDA not available).\n")
 
     def detect(self, image: np.ndarray, frame_number: int, timestamp_ms: float) -> Frame:
         """

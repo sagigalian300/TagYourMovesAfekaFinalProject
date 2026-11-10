@@ -25,3 +25,6 @@ CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 # docker will create a copy of the image (container) that will be removed automatically afterwards, docker will create a volume (two side tunnel between current dir - PWD in windows and /app in the linux) every change in one of them will occur in the other.
 # we specify the name of the image we want to create the container from, then we run the server with hot reload.
 #   docker run --rm -p 8001:8000 -v "${PWD}:/app" -e PYTHONPATH=/app tagyourmoves-object-detection uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+# if you want to run on GPU - you need to tell docker to use the GPU.. notice you must have "nvidia-container-toolkit" check this by running "docker run --rm --gpus all ubuntu nvidia-smi"
+#   docker run --rm --gpus all -p 8001:8000 -v "${PWD}:/app" -e PYTHONPATH=/app tagyourmoves-object-detection uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
