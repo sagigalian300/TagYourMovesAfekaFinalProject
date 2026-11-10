@@ -5,6 +5,7 @@ Runs a FastAPI server that handles image and JSON payloads, processes team
 assignments using a shared AI model, and returns the updated Frame data.
 """
 
+import torch
 import cv2
 import json
 from types import SimpleNamespace
@@ -35,6 +36,15 @@ async def lifespan(app: FastAPI):
     """
     print("[Startup] Initializing AI Models (Loading single shared SegFormer)...")
     shared_resources["segmenter"] = ClothingSegmenter()
+
+    # checking cuda availability
+    print(f"[Device Check] Is PyTorch CUDA available? {torch.cuda.is_available()}")
+    try:
+        print(f"[Device Check] Model is physically loaded on: {shared_resources['segmenter'].model.device}")
+    except AttributeError:
+        print("[Device Check] Couldn't access model.device directly, but CUDA status above indicates capability.")
+
+
     print("[Startup] Server is ready to accept requests.")
     
     yield
