@@ -94,7 +94,14 @@ Liveness check. Returns `{"status": "ok"}`.
 > `frames_data` must be sent as a **file**, not a text field. Text form fields are capped at
 > 1 MB, which a frame list exceeds after about 600 frames.
 
-**Response:** the same list of frames, sorted by `frame_number`, with estimates filled in.
+**Response:** the frames JSON exactly as it was sent, in the same order and format, with only
+each frame's `"ball"` repaired:
+
+| `ball` in the response | Meaning |
+|---|---|
+| unchanged | A detection the service kept, returned exactly as sent. |
+| `confidence: 0.0` | An estimate: the ball was missing, or the detection was rejected as not being the ball. |
+| `null` | No estimate, e.g. inside a gap longer than `max_gap_frames`. |
 
 **Errors:**
 
@@ -136,7 +143,8 @@ Rules:
 - **`confidence > 0`** means a real detection. A ball with **`confidence: 0.0`** is treated as
   a weak hint, not a detection.
 - **`players` matter.** Without them the service still works, but can't use possession to fill gaps.
-- Extra fields (e.g. `has_ball`, `team`) are kept unchanged in the response.
+- Everything except `ball` (players, rims, extra fields such as `has_ball` or `team`, the
+  frame order) comes back unchanged, so the response can go wherever the request's JSON could.
 - Coordinates are pixels, `(x1, y1)` top-left and `(x2, y2)` bottom-right.
 
 ### Example (Python)

@@ -3,7 +3,7 @@ Main entry point for the ball-move-repair microservice.
 
 Runs a FastAPI server that receives the detected frames of a video (and optionally the video
 itself), estimates the ball's location in frames where it was obscured or not detected, and
-returns the repaired frames.
+returns the same frames JSON with only the balls repaired.
 """
 
 import os
@@ -12,7 +12,7 @@ import json
 import inspect
 import tempfile
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -56,7 +56,7 @@ def _from_dict(cls, data: dict):
     return obj
 
 
-def parse_frames(frames_data: str) -> List[Frame]:
+def parse_frames(frames_data: str) -> Tuple[List[dict], List[Frame]]:
     """Parses and validates the frames sent with a request.
 
     Args:
@@ -64,7 +64,8 @@ def parse_frames(frames_data: str) -> List[Frame]:
             players and rims are lists (may be omitted).
 
     Returns:
-        List[Frame]: The frames sorted by frame_number.
+        Tuple[List[dict], List[Frame]]: The frames exactly as received, and a Frame object
+            for each of them, in the same order (frames[i] belongs to raw[i]).
 
     Raises:
         ValueError: If the JSON is malformed, empty, or the frame numbers are not
@@ -72,8 +73,8 @@ def parse_frames(frames_data: str) -> List[Frame]:
             frame must be present, including those without a ball.
     """
     raw = json.loads(frames_data)
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("frames_data must be a non-empty JSON list of frames")
+    if not isinstance(raw, list) or not raw or not all(isinstance(d, dict) for d in raw):
+        raise ValueError("frames_data must be a non-empty JSON list of frame objects")
 
     frames = []
     for d in raw:
@@ -84,11 +85,41 @@ def parse_frames(frames_data: str) -> List[Frame]:
             "rims": [_from_dict(Rim, r) for r in d.get("rims") or []],
         }))
 
-    frames.sort(key=lambda f: f.frame_number)
-    numbers = [f.frame_number for f in frames]
+    # Checked on a sorted copy: the caller may send frames in any order, and the response
+    # keeps their order, so the list itself is not reordered
+    numbers = sorted(f.frame_number for f in frames)
     if any(b - a != 1 for a, b in zip(numbers[:-1], numbers[1:])):
         raise ValueError("frame_number values must be consecutive, with no missing or duplicate frames")
-    return frames
+    return raw, frames
+
+
+def build_response(raw: List[dict], frames: List[Frame], received_balls: List[Optional[Ball]]) -> List[dict]:
+    """Writes the repaired balls back into the frames JSON as it was received.
+
+    Only the "ball" of a frame whose ball the service changed is replaced. Everything else
+    (frame order, key order, players, rims, fields only other services know about, number
+    formatting of untouched detections) is returned exactly as the caller sent it, so the
+    response can be used anywhere the request's JSON could.
+
+    Args:
+        raw (List[dict]): The frames as received; updated in place.
+        frames (List[Frame]): The repaired Frame objects, aligned with raw.
+        received_balls (List[Optional[Ball]]): Each frame's ball object before the repair,
+            aligned with raw.
+
+    Returns:
+        List[dict]: raw, with the repaired balls.
+    """
+    for d, f, received in zip(raw, frames, received_balls):
+        # The repair only replaces a frame's ball object when it changes it (estimate, removed
+        # false detection); an untouched detection is the very same object, and keeping its
+        # original dict avoids rewriting it (e.g. 10 becoming 10.0, or dropping extra keys)
+        if f.ball is received:
+            continue
+        d["ball"] = None if f.ball is None else {
+            "confidence": f.ball.confidence, "x1": f.ball.x1, "y1": f.ball.y1, "x2": f.ball.x2, "y2": f.ball.y2,
+        }
+    return raw
 
 
 @app.get("/health")
@@ -128,8 +159,9 @@ async def repair_ball_endpoint(
         debug (bool): With a video, also save a rendered video to mock/debug_outputs.
 
     Returns:
-        List[Frame]: The frames with estimated balls filled in (confidence 0.0 marks an
-            estimate). Detections rejected as not being the ball are removed or replaced.
+        List[dict]: The received frames JSON, in the same order and format, with only the
+            "ball" of each frame repaired: an estimate has confidence 0.0, and a detection
+            rejected as not being the ball is replaced by an estimate or null.
 
     Raises:
         HTTPException: If the frames JSON is invalid, or the video can't be read or doesn't
@@ -138,17 +170,22 @@ async def repair_ball_endpoint(
     # Starlette caps text form fields at 1 MB and FastAPI offers no way to raise it, while file
     # parts are spooled to disk with no cap, so the frame list must arrive as a file
     try:
-        frames = parse_frames((await frames_data.read()).decode("utf-8"))
+        raw, frames = parse_frames((await frames_data.read()).decode("utf-8"))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid frames JSON data: {e}")
 
+    # The repair needs the frames in time order and replaces the ball objects it changes,
+    # so remember what each frame held before, to tell its changes apart afterwards
+    ordered = sorted(frames, key=lambda f: f.frame_number)
+    received_balls = [f.ball for f in frames]
     frame_size = (frame_width, frame_height) if frame_width and frame_height else None
 
     if video is None:
         # The repair is CPU-bound; run it off the event loop so the server stays responsive
-        return await run_in_threadpool(repair_frames, frames, None, frame_size, max_gap_frames)
+        await run_in_threadpool(repair_frames, ordered, None, frame_size, max_gap_frames)
+        return build_response(raw, frames, received_balls)
 
-    if frames[0].frame_number != 0:
+    if ordered[0].frame_number != 0:
         raise HTTPException(status_code=400, detail="With a video, the frames must start at frame_number 0")
 
     # OpenCV reads videos from disk, so the upload is written to a temporary file
@@ -164,7 +201,7 @@ async def repair_ball_endpoint(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid video file: it could not be opened")
 
-        repaired = await run_in_threadpool(repair_frames, frames, video_path, frame_size, max_gap_frames)
+        repaired = await run_in_threadpool(repair_frames, ordered, video_path, frame_size, max_gap_frames)
 
         if debug:
             os.makedirs(DEBUG_DIR, exist_ok=True)
@@ -173,4 +210,4 @@ async def repair_ball_endpoint(
             await run_in_threadpool(render_video, video_path, repaired, debug_path)
             print(f"[Debug] Rendered video saved to: {debug_path}")
 
-    return repaired
+    return build_response(raw, frames, received_balls)
