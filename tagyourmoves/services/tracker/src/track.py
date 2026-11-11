@@ -131,3 +131,15 @@ class Track:
         # Prevent division by zero if width is extremely small
         r = w / float(h) if h > 0 else 0
         return np.array([u, v, s, r]).reshape((4, 1))
+    
+    def apply_camera_shift(self, dx: float, dy: float) -> None:
+        """
+        Shifts the Kalman Filter's internal position state to compensate for camera movement.
+        This ensures predictions remain accurate even when the background shifts.
+
+        Args:
+            dx (float): The positional shift along the x-axis in pixels.
+            dy (float): The positional shift along the y-axis in pixels.
+        """
+        self.kf.x[0] += dx  # Update the u coordinate (center x)
+        self.kf.x[1] += dy  # Update the v coordinate (center y)
