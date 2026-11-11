@@ -381,22 +381,5 @@ These values were tuned with `evaluate_offline.py` on two test videos. Re-run it
 **`400` "frame_number values must be consecutive".** A frame is missing from the list. Include
 every frame, with `"ball": null` where there was none.
 
-**Docker build fails with `CERTIFICATE_VERIFY_FAILED`.** Something on your computer intercepts
-HTTPS (often antivirus "web shield" or HTTPS scanning, or a company proxy), and the container
-doesn't trust its certificate. Either exclude `pypi.org` and `files.pythonhosted.org` from the
-scanning, or export the scanner's root certificate as a PEM file and pass it to pip as a build
-secret. That needs a copy of the Dockerfile whose `pip install` line is changed to
-`RUN --mount=type=secret,id=ca pip install --no-cache-dir --cert /run/secrets/ca -r requirements.txt`:
-
-```bash
-docker build -f Dockerfile.ca --secret id=ca,src=root_ca.pem -t tagyourmoves-ball-move-repair .
-```
-
-**Docker Desktop shows an error and quits, with "The file cannot be accessed by the system" in
-its log.** Leftover socket files in `%LOCALAPPDATA%\Docker\run` (or
-`%LOCALAPPDATA%\docker-secrets-engine`) can't be deleted, often because antivirus is
-blocking them. Quit Docker, rename those folders (e.g. to `run.stale`) and start Docker again.
-Adding the Docker folders as antivirus exclusions prevents it from coming back.
-
 **`test_offline.py` is slow the first time.** Detection runs on every frame (minutes on a CPU),
 then the results are cached.
