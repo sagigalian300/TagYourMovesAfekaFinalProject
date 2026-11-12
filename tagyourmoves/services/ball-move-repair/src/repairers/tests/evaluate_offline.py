@@ -2,22 +2,19 @@
 Evaluation harness for the offline ball estimator.
 
 There is no labelled ground truth, so we make our own from the video: take stretches
-where YOLO saw the ball confidently, hide them, run the full pipeline (optical-flow hints
-+ offline estimator) and compare the estimates against the detections we hid.
+where YOLO saw the ball confidently, hide them, run the same repair the service runs, and
+compare the estimates against the detections we hid.
 
 Usage:
     python evaluate_offline.py                      # both test videos, 5 trials each
-    python evaluate_offline.py --videos test_vod2.mp4 --trials 10 --no-lk
+    python evaluate_offline.py --videos test_vod2.mp4 --trials 10
 """
 import os
 import sys
 import argparse
 import random
 import numpy as np
-from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
-
-import cv2
 
 # Same import path as test_offline.py sets up. Repeated here rather than relying on importing
 # test_offline first, so reordering the imports below can't break this file
@@ -26,27 +23,12 @@ sys.path.insert(0, os.path.join(REPAIRERS_DIR, "contracts"))
 sys.path.insert(0, os.path.join(REPAIRERS_DIR, "offline"))
 
 from Frame import Frame
-from Offline import estimate_missing_balls_offline
-from test_offline import (detect_video, load_detections, apply_optical_flow, default_cache_path,
-                          camera_motion_for, default_camera_cache_path, DEFAULT_MODEL, DEFAULT_IMGSZ,
-                          MODELS_DIR)
+from pipeline import repair_frames
+from test_offline import (detect_video, load_detections, default_cache_path, video_frame_size,
+                          DEFAULT_MODEL, DEFAULT_IMGSZ, MODELS_DIR)
 
-
-@dataclass
-class VideoInfo:
-    """
-    Video-level data an estimator needs besides the frames.
-
-    Attributes:
-        frame_size (Tuple[int, int]): (width, height) of the video.
-        camera_motion (Optional[np.ndarray]): (n, 2, 3) transforms from estimate_camera_motion.
-    """
-    frame_size: Tuple[int, int]
-    camera_motion: Optional[np.ndarray]
-
-
-Estimator = Callable[[List[Frame], VideoInfo], List[Frame]]
-HintPass = Callable[[str, List[Frame]], List[Frame]]
+# An estimator takes the frames (some balls hidden) and the video's (width, height)
+Estimator = Callable[[List[Frame], Tuple[int, int]], List[Frame]]
 
 GAP_BUCKETS = [(3, 7), (8, 15), (16, 30), (31, 45)]
 
@@ -151,25 +133,21 @@ def _is_continuous_track(frames: List[Frame], first: int, last: int,
 
 
 def run_trial(
-    video_path: str,
     cache_path: str,
     estimator: Estimator,
-    hint_pass: Optional[HintPass],
     rng: random.Random,
-    info: VideoInfo,
+    frame_size: Tuple[int, int],
     gap_range: Tuple[int, int],
     min_gt_conf: float,
 ) -> List[Dict]:
     """
-    Runs one trial: hides random windows of detections, runs the pipeline, and scores it.
+    Runs one trial: hides random windows of detections, runs the estimator, and scores it.
 
     Args:
-        video_path (str): Path to the video (needed by the optical-flow pass).
         cache_path (str): Detection cache to load fresh frames from.
         estimator (Estimator): The estimator under test.
-        hint_pass (Optional[HintPass]): Optical-flow pass to run before the estimator, or None.
         rng (random.Random): Random generator for picking the windows.
-        info (VideoInfo): Frame size and camera motion for the estimator.
+        frame_size (Tuple[int, int]): (width, height) of the video, for the estimator.
         gap_range (Tuple[int, int]): Min and max hidden window length.
         min_gt_conf (float): Min confidence for a hidden detection to be scored against.
 
@@ -188,9 +166,7 @@ def run_trial(
                 ground_truth[i] = (_center_and_size(b), end - start)
             frames[i].ball = None
 
-    if hint_pass is not None:
-        frames = hint_pass(video_path, frames)
-    frames = estimator(frames, info)
+    frames = estimator(frames, frame_size)
 
     results = []
     for i, ((gx, gy, gsize), gap_len) in ground_truth.items():
@@ -251,7 +227,6 @@ def evaluate(
     video_path: str,
     model_path: str,
     estimator: Estimator,
-    hint_pass: Optional[HintPass] = apply_optical_flow,
     trials: int = 5,
     seed: int = 0,
     gap_range: Tuple[int, int] = (3, 30),
@@ -266,8 +241,6 @@ def evaluate(
         video_path (str): Path to the video.
         model_path (str): Path to the detector weights (detections are cached).
         estimator (Estimator): The estimator under test.
-        hint_pass (Optional[HintPass], optional): Optical-flow pass to run first, or None to skip.
-            Defaults to apply_optical_flow.
         trials (int, optional): Number of trials. Defaults to 5.
         seed (int, optional): Base random seed. Defaults to 0.
         gap_range (Tuple[int, int], optional): Min and max hidden window length. Defaults to (3, 30).
@@ -280,18 +253,13 @@ def evaluate(
         Dict: 'overall' (output of summarize) and 'results' (all per-frame entries).
     """
     cache_path =default_cache_path(video_path, model_path, imgsz)
-    frames = detect_video(video_path, model_path, cache_path, imgsz=imgsz)
-
-    cap = cv2.VideoCapture(video_path)
-    frame_size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    cap.release()
-    # Camera motion only depends on the background and the player boxes, which masking doesn't touch
-    info = VideoInfo(frame_size, camera_motion_for(video_path, frames, default_camera_cache_path(video_path)))
+    detect_video(video_path, model_path, cache_path, imgsz=imgsz)
+    frame_size = video_frame_size(video_path)
 
     results = []
     for t in range(trials):
         rng = random.Random(seed * 1000 + t)
-        results += run_trial(video_path, cache_path, estimator, hint_pass, rng, info, gap_range, min_gt_conf)
+        results += run_trial(cache_path, estimator, rng, frame_size, gap_range, min_gt_conf)
 
     overall = summarize(results)
     if verbose:
@@ -304,21 +272,18 @@ def evaluate(
     return {'overall': overall, 'results': results}
 
 
-def default_estimator(max_gap_frames: int = 45, **options) -> Estimator:
+def default_estimator(max_gap_frames: int = 45) -> Estimator:
     """
-    Wraps estimate_missing_balls_offline as an Estimator.
+    Wraps the service's repair (pipeline.repair_frames) as an Estimator, so what is measured
+    is exactly what the service does.
 
     Args:
         max_gap_frames (int, optional): Longest gap that is filled. Defaults to 45.
-        **options: Extra keyword arguments for estimate_missing_balls_offline,
-            e.g. use_possession=False.
 
     Returns:
-        Estimator: Function taking (frames, VideoInfo) and returning the estimated frames.
+        Estimator: Function taking (frames, frame_size) and returning the estimated frames.
     """
-    return lambda frames, info: estimate_missing_balls_offline(
-        frames, max_gap_frames=max_gap_frames, frame_size=info.frame_size, camera_motion=info.camera_motion, **options
-    )
+    return lambda frames, frame_size: repair_frames(frames, frame_size, max_gap_frames)
 
 
 if __name__ == "__main__":
@@ -331,7 +296,6 @@ if __name__ == "__main__":
     parser.add_argument('--trials', type=int, default=5)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--max-gap', type=int, default=45)
-    parser.add_argument('--no-lk', action='store_true', help="Skip the Lucas-Kanade hint pass")
     args = parser.parse_args()
 
     for video in args.videos:
@@ -339,7 +303,6 @@ if __name__ == "__main__":
             os.path.join(script_dir, video),
             os.path.join(MODELS_DIR, args.model),
             default_estimator(args.max_gap),
-            hint_pass=None if args.no_lk else apply_optical_flow,
             trials=args.trials,
             seed=args.seed,
             imgsz=args.imgsz or (DEFAULT_IMGSZ if args.model == DEFAULT_MODEL else None),

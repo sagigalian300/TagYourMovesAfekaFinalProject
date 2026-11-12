@@ -3,7 +3,6 @@ import re
 import sys
 import json
 import cv2
-import numpy as np
 from typing import List, Optional
 from ultralytics import YOLO
 
@@ -22,9 +21,7 @@ from Ball import Ball
 from Player import Player
 from Rim import Rim
 from Frame import Frame
-from Offline import estimate_missing_balls_offline
-from CameraMotion import estimate_camera_motion
-from pipeline import apply_optical_flow, render_video  # also imported from here by evaluate_offline.py
+from pipeline import repair_frames
 
 # Detector used by the local test scripts. Any Ultralytics model works, since classes are
 # matched by name below. 1280 instead of the default 640 because the ball is small: at 640 a
@@ -215,39 +212,61 @@ def detect_video(input_video_path: str, model_path: str, cache_path: Optional[st
     return frames
 
 
-def camera_motion_for(input_video_path: str, frames: List[Frame], cache_path: Optional[str] = None) -> np.ndarray:
+def video_frame_size(input_video_path: str):
     """
-    Gets the camera motion per frame (see CameraMotion.py), cached since it only depends on
-    the video and the player boxes.
+    Reads a video's frame size.
 
     Args:
         input_video_path (str): Path to the video.
-        frames (List[Frame]): Frames in video order; their player boxes are masked out.
-        cache_path (Optional[str], optional): .npy cache. Loaded if it exists, written otherwise.
-            None disables caching. Defaults to None.
 
     Returns:
-        np.ndarray: (n, 2, 3) transforms from estimate_camera_motion.
+        Tuple[int, int]: (width, height) in pixels.
     """
-    if cache_path and os.path.exists(cache_path):
-        return np.load(cache_path)
-    motion = estimate_camera_motion(input_video_path, frames)
-    if cache_path:
-        np.save(cache_path, motion)
-    return motion
+    cap = cv2.VideoCapture(input_video_path)
+    frame_size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    cap.release()
+    return frame_size
 
 
-def default_camera_cache_path(video_path: str) -> str:
+def render_video(input_video_path: str, frames: List[Frame], output_video_path: str):
     """
-    Builds the camera motion cache path for a video.
+    Writes a copy of the video with the ball drawn on it: green for detections,
+    red for estimates. Lives in the tests because only a person checking the results by eye
+    needs it; the service never sees the video.
 
     Args:
-        video_path (str): Path to the video.
-
-    Returns:
-        str: e.g. 'test_vod2.camera.npy' next to the video.
+        input_video_path (str): Path to the source video.
+        frames (List[Frame]): Frames in video order, with their final balls.
+        output_video_path (str): Path of the .mp4 to write.
     """
-    return f"{os.path.splitext(video_path)[0]}.camera.npy"
+    cap = cv2.VideoCapture(input_video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+
+    for frame_obj in frames:
+        ret, image_frame = cap.read()
+        if not ret:
+            break
+
+        if frame_obj.ball is not None:
+            b = frame_obj.ball
+            x1, y1, x2, y2 = int(b.x1), int(b.y1), int(b.x2), int(b.y2)
+
+            color = (0, 255, 0) if b.confidence > 0.0 else (0, 0, 255)
+            label = f"Detected: {b.confidence:.2f}" if b.confidence > 0.0 else "Estimated"
+
+            cv2.rectangle(image_frame, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(image_frame, (x1, max(0, y1 - 20)), (x1 + 110, y1), color, -1)
+            cv2.putText(image_frame, label, (x1 + 2, max(12, y1 - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+        out.write(image_frame)
+
+    cap.release()
+    out.release()
 
 
 def require_model(model_path: str):
@@ -271,8 +290,8 @@ def require_model(model_path: str):
 
 def test_offline_estimation(input_video_path: str, output_video_path: str, model_path: str, imgsz: Optional[int] = None):
     """
-    Runs the whole pipeline: detection, camera motion, optical-flow hints, offline estimation
-    and rendering.
+    Runs the whole pipeline: detection, then the same repair the service runs (rim-based
+    camera motion and the offline estimator), then rendering.
 
     Args:
         input_video_path (str): Path to the video.
@@ -285,20 +304,8 @@ def test_offline_estimation(input_video_path: str, output_video_path: str, model
         require_model(model_path)
     frames_metadata = detect_video(input_video_path, model_path, cache_path, imgsz=imgsz)
 
-    print("Estimating camera motion...")
-    camera_motion = camera_motion_for(input_video_path, frames_metadata, default_camera_cache_path(input_video_path))
-
-    print("Applying Lucas-Kanade hints...")
-    frames_metadata = apply_optical_flow(input_video_path, frames_metadata)
-
-    cap = cv2.VideoCapture(input_video_path)
-    frame_size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    cap.release()
-
     print("Offline Processing: Estimating missing balls...")
-    frames_metadata = estimate_missing_balls_offline(
-        frames_metadata, max_gap_frames=45, frame_size=frame_size, camera_motion=camera_motion
-    )
+    frames_metadata = repair_frames(frames_metadata, video_frame_size(input_video_path), max_gap_frames=45)
 
     print("Pass 2: Rendering output video...")
     render_video(input_video_path, frames_metadata, output_video_path)

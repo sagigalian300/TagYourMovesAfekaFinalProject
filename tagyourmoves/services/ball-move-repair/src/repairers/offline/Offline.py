@@ -9,11 +9,8 @@ from Ball import Ball
 from CameraMotion import to_reference, from_reference
 
 # All distances below are expressed in ball diameters, so they scale with zoom / resolution.
-MAX_SPEED = 2.5             # Max plausible ball motion between consecutive frames
-MAX_SIZE_RATIO = 2.0        # Two detections whose sizes differ more than this aren't the same ball
-TRACKLET_GAP = 5            # Max frames between detections linked into the same tracklet
-DETECTION_NOISE = 0.1       # Std of a YOLO detection's center
-HINT_NOISE = 0.1            # Std of an optical-flow hint, multiplied by (1 + frames since detection)
+MAX_SPEED = 2.5             # Max plausible ball motion between consecutive frames (sets the Kalman's starting doubt)
+DETECTION_NOISE = 0.1       # Std of a given ball's center: small, since the input is presumed accurate
 ACCELERATION_NOISE = 0.15   # Std of unmodelled acceleration per frame in the Kalman model
 POSSESSION_CONTEXT = 10     # Frames around a gap used to check whether the ball moves with the player
 PLAYER_MARGIN = 0.5         # How far outside a player's box the ball may be and still be "held"
@@ -29,19 +26,19 @@ def estimate_missing_balls_offline(
     frame_size: Optional[Tuple[int, int]] = None,
     camera_motion: Optional[np.ndarray] = None,
     use_possession: bool = True,
-    use_hints: bool = True,
 ) -> List[Frame]:
     """
-    Estimates the ball's location in frames where it is obscured or was not detected.
+    Estimates the ball's location in frames where it is missing (ball is None).
 
-    Input convention: a ball with confidence > 0 is a detection; a ball with confidence 0.0
-    is a weak hint from an earlier stage (e.g. Lucas-Kanade optical flow). Every estimate
-    written back has confidence 0.0.
+    Contract: every object in the frames is presumed accurate, including every ball that is
+    present, whatever its confidence. Checking detections is the detection service's job, so
+    present balls are used as they are and never changed; only missing balls are filled.
+    Every estimate written back has confidence 0.0.
 
-    Each gap between two trusted detections is filled using both of its ends:
+    Each gap between two known balls is filled using both of its ends:
       * possession - the same player holds the ball on both sides and the ball moves with
                      that player around the gap: the ball follows the player's box
-      * otherwise  - a Kalman RTS smoother over the detections (and optical-flow hints)
+      * otherwise  - a Kalman RTS smoother over the known balls
     Gaps longer than `max_gap_frames` are left empty apart from a short stretch near each end.
 
     Args:
@@ -54,81 +51,54 @@ def estimate_missing_balls_offline(
             camera-stabilized coordinates, so pans don't look like ball motion. Defaults to None.
         use_possession (bool, optional): Fill gaps by following the player holding the ball.
             Switch off for evaluation. Defaults to True.
-        use_hints (bool, optional): Feed optical-flow hints into the Kalman smoother.
-            Switch off for evaluation. Defaults to True.
 
     Returns:
-        List[Frame]: The same frames, with estimated balls (confidence 0.0) in the gaps and
-            rejected detections removed.
+        List[Frame]: The same frames, with estimated balls (confidence 0.0) in the gaps.
     """
     n = len(frames)
     if n == 0:
         return frames
 
     # =================================================================
-    # STEP 1: Extract detections and hints
+    # STEP 1: Extract the known balls (the anchors every gap is filled from)
     # =================================================================
     centers = np.full((n, 2), np.nan)
     sizes = np.full((n, 2), np.nan)
-    is_detection = np.zeros(n, dtype=bool)
-    is_hint = np.zeros(n, dtype=bool)
-
     for i, f in enumerate(frames):
         b = f.ball
-        if b is None:
-            continue
-        centers[i] = ((b.x1 + b.x2) / 2, (b.y1 + b.y2) / 2)
-        sizes[i] = (b.x2 - b.x1, b.y2 - b.y1)
-        if b.confidence > 0.0:
-            is_detection[i] = True
-        else:
-            is_hint[i] = True
+        if b is not None:
+            centers[i] = ((b.x1 + b.x2) / 2, (b.y1 + b.y2) / 2)
+            sizes[i] = (b.x2 - b.x1, b.y2 - b.y1)
 
-    if not is_detection.any():
+    anchors = np.flatnonzero(~np.isnan(centers[:, 0]))
+    if len(anchors) == 0:
         return frames
 
     # Ball motion is modelled in camera-stabilized coordinates when the camera motion is known
     stable = centers.copy()
     if camera_motion is not None:
-        for i in np.flatnonzero(is_detection | is_hint):
+        for i in anchors:
             stable[i] = to_reference(camera_motion, i, centers[i:i + 1])[0]
-
-    # =================================================================
-    # STEP 2: Keep only detections that belong to the ball's track (not heads, lights, a 2nd ball)
-    # =================================================================
-    confidences = np.array([f.ball.confidence if f.ball is not None else 0.0 for f in frames])
-    anchors = _select_ball_track(stable, sizes, confidences, np.flatnonzero(is_detection), max_gap_frames)
-    is_anchor = np.zeros(n, dtype=bool)
-    is_anchor[anchors] = True
 
     # Ball diameter for every frame, interpolated between anchors
     anchor_diameters = sizes[anchors].mean(axis=1)
     diameters = np.interp(np.arange(n), anchors, anchor_diameters)
 
     # =================================================================
-    # STEP 3: Track players so "the same player" means something across frames
+    # STEP 2: Track players so "the same player" means something across frames
     # =================================================================
     players = _PlayerTracks(frames) if use_possession else None
 
     # =================================================================
-    # STEP 4: Kalman RTS smoother over anchors (+ hints) as the general fallback
+    # STEP 3: Kalman RTS smoother over the anchors as the general fallback
     # =================================================================
-    # Optical flow ran before track selection, so drop hints that continue a rejected detection
-    last_detection = -1
-    for i in range(n):
-        if is_detection[i]:
-            last_detection = i
-        elif is_hint[i] and (not use_hints or last_detection < 0 or not is_anchor[last_detection]):
-            is_hint[i] = False
-
-    hint_idx = np.flatnonzero(is_hint)
-    smoothed = _kalman_smooth(n, anchors, hint_idx, stable, diameters, max_gap_frames)
+    smoothed = _kalman_smooth(n, anchors, stable, diameters, max_gap_frames)
     if camera_motion is not None:
         for i in np.flatnonzero(np.isfinite(smoothed[:, 0])):
             smoothed[i] = from_reference(camera_motion, i, smoothed[i:i + 1])[0]
 
     # =================================================================
-    # STEP 5: Fill every gap
+    # STEP 4: Fill every gap
     # =================================================================
     estimates: Dict[int, np.ndarray] = {}
 
@@ -191,99 +161,22 @@ def estimate_missing_balls_offline(
     follow_owner(anchors[-1], range(anchors[-1] + 1, min(n, anchors[-1] + 1 + ONE_SIDED_FRAMES)))
 
     # =================================================================
-    # STEP 6: Write estimates back to the frames
+    # STEP 5: Write estimates into the frames whose ball is missing
     # =================================================================
     box_sizes = _interpolate_sizes(n, anchors, sizes)
 
+    # Frames that already hold a ball are skipped: under the contract their ball is correct,
+    # and the caller gets it back exactly as sent
     for i, f in enumerate(frames):
-        if is_anchor[i]:
-            continue
-        if i in estimates and np.all(np.isfinite(estimates[i])):
+        if f.ball is None and i in estimates and np.all(np.isfinite(estimates[i])):
             f.ball = _make_ball(estimates[i], box_sizes[i], frame_size)
-        elif is_hint[i]:
-            continue  # nothing better than the optical-flow hint (e.g. inside a long gap)
-        else:
-            f.ball = None
 
     return frames
-
-
-def _select_ball_track(
-    centers: np.ndarray,
-    sizes: np.ndarray,
-    confidences: np.ndarray,
-    detections: np.ndarray,
-    max_gap_frames: int,
-) -> np.ndarray:
-    """
-    Selects the detections that belong to the real ball's track.
-
-    YOLO's ball class also fires on other objects, sometimes for many frames in a row, so not
-    every detection is the ball.
-      1. Split detections into tracklets: runs whose consecutive detections are physically
-         consistent (plausible speed, similar size).
-      2. Pick the chain of tracklets with the highest total confidence in which every jump between
-         consecutive tracklets is also physically possible (longest path in a DAG, by dynamic
-         programming). After a gap longer than max_gap_frames anything is possible.
-
-    Args:
-        centers (np.ndarray): (n, 2) ball centers per frame, NaN where there is none.
-        sizes (np.ndarray): (n, 2) ball box width/height per frame, NaN where there is none.
-        confidences (np.ndarray): (n,) detection confidence per frame.
-        detections (np.ndarray): Sorted indices of the frames holding a detection. Must not be empty.
-        max_gap_frames (int): Gap length after which any jump between detections is allowed.
-
-    Returns:
-        np.ndarray: Sorted frame indices of the accepted detections (the anchors).
-    """
-    diameters = sizes.mean(axis=1)
-
-    def consistent(i: int, j: int) -> bool:
-        """
-        Checks whether the detections in frames i and j can be the same ball.
-
-        Args:
-            i (int): Frame index of the first detection.
-            j (int): Frame index of the second detection.
-
-        Returns:
-            bool: True if their sizes are similar and the distance fits the time between them.
-        """
-        if max(diameters[i], diameters[j]) / min(diameters[i], diameters[j]) > MAX_SIZE_RATIO:
-            return False
-        diameter = (diameters[i] + diameters[j]) / 2
-        return np.hypot(*(centers[j] - centers[i])) <= diameter * (MAX_SPEED * abs(j - i) + 1.0)
-
-    tracklets = [[int(detections[0])]]
-    for i in detections[1:]:
-        last = tracklets[-1][-1]
-        if i - last <= TRACKLET_GAP and consistent(last, i):
-            tracklets[-1].append(int(i))
-        else:
-            tracklets.append([int(i)])
-
-    score = [float(confidences[t].sum()) for t in tracklets]
-    best = list(score)
-    parent = [-1] * len(tracklets)
-    for k in range(len(tracklets)):
-        for j in range(k):
-            end, start = tracklets[j][-1], tracklets[k][0]
-            if (start - end > max_gap_frames + 1 or consistent(end, start)) and best[j] + score[k] > best[k]:
-                best[k] = best[j] + score[k]
-                parent[k] = j
-
-    chain = []
-    k = int(np.argmax(best))
-    while k != -1:
-        chain.extend(tracklets[k])
-        k = parent[k]
-    return np.array(sorted(chain), dtype=int)
 
 
 def _kalman_smooth(
     n: int,
     anchors: np.ndarray,
-    hints: np.ndarray,
     centers: np.ndarray,
     diameters: np.ndarray,
     max_gap_frames: int,
@@ -296,8 +189,7 @@ def _kalman_smooth(
 
     Args:
         n (int): Number of frames in the video.
-        anchors (np.ndarray): Sorted frame indices of the accepted detections.
-        hints (np.ndarray): Frame indices of optical-flow hints to use as weak measurements.
+        anchors (np.ndarray): Sorted frame indices of the known balls.
         centers (np.ndarray): (n, 2) ball centers per frame (camera-stabilized when available).
         diameters (np.ndarray): (n,) ball diameter per frame, used to scale the noise.
         max_gap_frames (int): Gaps longer than this split the video into separate segments.
@@ -308,8 +200,6 @@ def _kalman_smooth(
     out = np.full((n, 2), np.nan)
     is_anchor = np.zeros(n, dtype=bool)
     is_anchor[anchors] = True
-    is_hint = np.zeros(n, dtype=bool)
-    is_hint[hints] = True
 
     breaks = np.flatnonzero(np.diff(anchors) > max_gap_frames + 1)
     for segment in np.split(anchors, breaks + 1):
@@ -328,16 +218,10 @@ def _kalman_smooth(
         kf.P = np.diag([scale ** 2, (MAX_SPEED * scale) ** 2, scale ** 2, (MAX_SPEED * scale) ** 2])
 
         mu, cov = [], []
-        last_anchor = start
         for i in range(start, end + 1):
             kf.predict()
             if is_anchor[i]:
                 kf.update(centers[i], R=np.eye(2) * (DETECTION_NOISE * diameters[i]) ** 2)
-                last_anchor = i
-            elif is_hint[i]:
-                # Optical flow drifts, so trust each hint less the further it is from a detection
-                age = i - last_anchor
-                kf.update(centers[i], R=np.eye(2) * (HINT_NOISE * diameters[i] * (1 + age)) ** 2)
             mu.append(kf.x.copy())
             cov.append(kf.P.copy())
 
@@ -365,8 +249,9 @@ def _linear_residual(t: np.ndarray, points: np.ndarray) -> float:
 
 class _PlayerTracks:
     """
-    Links player boxes across frames by IoU (Hungarian matching) and smooths each track.
-    Kept internal so the Player objects themselves are not modified.
+    Links player boxes across frames into tracks and smooths each track. Uses the players'
+    tracking_id when the input provides one for every player, and IoU (Hungarian) matching
+    otherwise. Kept internal so the Player objects themselves are not modified.
 
     Attributes:
         tracks (List[Tuple[int, np.ndarray]]): Per track id: (first frame, (k, 4) smoothed boxes
@@ -380,6 +265,62 @@ class _PlayerTracks:
 
         Args:
             frames (List[Frame]): Frames in video order; only their players are read.
+        """
+        # The detection service's tracker is presumed accurate, so when it labelled every player
+        # its ids are used as they are; matching boxes by overlap is only the fallback, since it
+        # can swap two players who cross each other
+        all_players = [p for f in frames for p in f.players]
+        if all_players and all(p.tracking_id is not None for p in all_players):
+            raw = self._group_by_id(frames)
+        else:
+            raw = self._match_by_overlap(frames)
+
+        # Per track: fill short holes by interpolation, then smooth with a moving average
+        self.tracks: List[Tuple[int, np.ndarray]] = []
+        self.present: Dict[int, List[int]] = {}
+        for track in self._split_at_long_holes(raw):
+            idx = np.array(sorted(track))
+            boxes = np.array([track[i] for i in idx])
+            frames_range = np.arange(idx[0], idx[-1] + 1)
+            filled = np.stack([np.interp(frames_range, idx, boxes[:, c]) for c in range(4)], axis=1)
+            if len(filled) >= PLAYER_SMOOTHING:
+                kernel = np.ones(PLAYER_SMOOTHING) / PLAYER_SMOOTHING
+                pad = PLAYER_SMOOTHING // 2
+                padded = np.pad(filled, ((pad, pad), (0, 0)), mode='edge')
+                filled = np.stack([np.convolve(padded[:, c], kernel, mode='valid') for c in range(4)], axis=1)
+
+            tid = len(self.tracks)
+            self.tracks.append((int(idx[0]), filled))
+            for i in idx:
+                self.present.setdefault(int(i), []).append(tid)
+
+    @staticmethod
+    def _group_by_id(frames: List[Frame]) -> List[Dict[int, np.ndarray]]:
+        """
+        Groups player boxes into tracks by their tracking_id.
+
+        Args:
+            frames (List[Frame]): Frames in video order, every player carrying a tracking_id.
+
+        Returns:
+            List[Dict[int, np.ndarray]]: One {frame index: [x1, y1, x2, y2]} per tracking_id.
+        """
+        by_id: Dict[object, Dict[int, np.ndarray]] = {}
+        for i, f in enumerate(frames):
+            for p in f.players:
+                by_id.setdefault(p.tracking_id, {})[i] = np.array([p.x1, p.y1, p.x2, p.y2], dtype=float)
+        return list(by_id.values())
+
+    @staticmethod
+    def _match_by_overlap(frames: List[Frame]) -> List[Dict[int, np.ndarray]]:
+        """
+        Links player boxes into tracks by IoU with each track's last box (Hungarian matching).
+
+        Args:
+            frames (List[Frame]): Frames in video order.
+
+        Returns:
+            List[Dict[int, np.ndarray]]: One {frame index: [x1, y1, x2, y2]} per track.
         """
         raw: List[Dict[int, np.ndarray]] = []
         active: List[int] = []  # indices into raw
@@ -402,25 +343,35 @@ class _PlayerTracks:
                 if c not in matched:
                     raw.append({i: boxes[c]})
                     active.append(len(raw) - 1)
+        return raw
 
-        # Per track: fill short holes by interpolation, then smooth with a moving average
-        self.tracks: List[Tuple[int, np.ndarray]] = []
-        self.present: Dict[int, List[int]] = {}
+    @staticmethod
+    def _split_at_long_holes(raw: List[Dict[int, np.ndarray]]) -> List[Dict[int, np.ndarray]]:
+        """
+        Splits each track where the player is missing for more than PLAYER_MAX_MISS frames.
+
+        Short holes are later filled by interpolation, but a player who left the picture and
+        came back must not get invented boxes for the time they were away: the ball could be
+        placed in a box that never existed.
+
+        Args:
+            raw (List[Dict[int, np.ndarray]]): Tracks as {frame index: box}.
+
+        Returns:
+            List[Dict[int, np.ndarray]]: The tracks, each holding no hole longer than PLAYER_MAX_MISS.
+        """
+        parts = []
         for track in raw:
-            idx = np.array(sorted(track))
-            boxes = np.array([track[i] for i in idx])
-            frames_range = np.arange(idx[0], idx[-1] + 1)
-            filled = np.stack([np.interp(frames_range, idx, boxes[:, c]) for c in range(4)], axis=1)
-            if len(filled) >= PLAYER_SMOOTHING:
-                kernel = np.ones(PLAYER_SMOOTHING) / PLAYER_SMOOTHING
-                pad = PLAYER_SMOOTHING // 2
-                padded = np.pad(filled, ((pad, pad), (0, 0)), mode='edge')
-                filled = np.stack([np.convolve(padded[:, c], kernel, mode='valid') for c in range(4)], axis=1)
-
-            tid = len(self.tracks)
-            self.tracks.append((int(idx[0]), filled))
-            for i in idx:
-                self.present.setdefault(int(i), []).append(tid)
+            part: Dict[int, np.ndarray] = {}
+            last = None
+            for i in sorted(track):
+                if last is not None and i - last > PLAYER_MAX_MISS:
+                    parts.append(part)
+                    part = {}
+                part[i] = track[i]
+                last = i
+            parts.append(part)
+        return parts
 
     def box(self, tid: int, i: int) -> Optional[np.ndarray]:
         """

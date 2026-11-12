@@ -1,8 +1,8 @@
 # Docker will install a slim linux OS with python 3.10 on it.
 FROM python:3.10-slim
 
-# No system packages are installed: requirements.txt uses opencv-python-headless, which doesn't
-# need the GUI libraries (libgl1, ...) that the full opencv-python requires, keeping the image small.
+# No system packages are installed: the service works on the frames JSON alone (no video, no
+# OpenCV), so plain Python packages are all it needs, which keeps the image small.
 
 # Tells docker to work within the folder app that will be created
 WORKDIR /app
