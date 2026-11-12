@@ -74,7 +74,7 @@ coordinates exactly.
 
 ## API
 
-Interactive documentation is available at `http://localhost:8000/docs` while the service runs.
+Interactive documentation is available at `http://localhost:8003/docs` while the service runs.
 
 ### `GET /health`
 
@@ -158,7 +158,7 @@ with open("frames.json") as f:
     frames_json = f.read()
 
 response = requests.post(
-    "http://localhost:8000/repair-ball",
+    "http://localhost:8003/repair-ball",
     files={"frames_data": ("frames.json", frames_json, "application/json")},
     data={"frame_width": 1920, "frame_height": 1080},
 )
@@ -172,7 +172,7 @@ print(f"{len(estimated)} frames got an estimated ball")
 ### Example (curl)
 
 ```bash
-curl -X POST http://localhost:8000/repair-ball -F "frames_data=@frames.json;type=application/json" -F "frame_width=1920" -F "frame_height=1080"
+curl -X POST http://localhost:8003/repair-ball -F "frames_data=@frames.json;type=application/json" -F "frame_width=1920" -F "frame_height=1080"
 ```
 
 ---
@@ -185,7 +185,7 @@ curl -X POST http://localhost:8000/repair-ball -F "frames_data=@frames.json;type
 pip install -r requirements.txt
 ```
 ```bash
-uvicorn main:app --port 8000
+uvicorn main:app --port 8003
 ```
 
 ### With Docker
@@ -194,7 +194,7 @@ uvicorn main:app --port 8000
 docker build -t tagyourmoves-ball-move-repair .
 ```
 ```bash
-docker run --rm -p 8000:8000 tagyourmoves-ball-move-repair
+docker run --rm -p 8003:8003 tagyourmoves-ball-move-repair
 ```
 
 The image needs only plain Python packages (FastAPI, NumPy, SciPy, FilterPy): the service never
@@ -304,7 +304,7 @@ To test camera motion locally, use a model with a rim class: COCO models have no
 ```
 ball-move-repair/
 ├── main.py                    FastAPI app: endpoints, request parsing and validation
-├── Dockerfile                 Service image (python:3.10-slim, uvicorn on port 8000)
+├── Dockerfile                 Service image (python:3.10-slim, uvicorn on port 8003)
 ├── requirements.txt           Service dependencies
 ├── requirements-dev.txt       Extra dependencies for the local scripts (YOLO, OpenCV)
 ├── .dockerignore              Keeps videos, weights and caches out of the image
