@@ -18,15 +18,17 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 # The repair code and its Frame/Ball/Player/Rim classes import each other by bare module
-# name (e.g. `from Ball import Ball`), so their folder has to be on the import path
-OFFLINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "repairers", "offline")
-sys.path.insert(0, OFFLINE_DIR)
+# name (e.g. `from Ball import Ball` inside Frame.py, which can't be changed), so both their
+# folders have to be on the import path: contracts/ for the shared classes, offline/ for the algorithm
+REPAIRERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "repairers")
+sys.path.insert(0, os.path.join(REPAIRERS_DIR, "contracts"))
+sys.path.insert(0, os.path.join(REPAIRERS_DIR, "offline"))
 
-from Ball import Ball  # noqa: E402
-from Frame import Frame  # noqa: E402
-from Player import Player  # noqa: E402
-from Rim import Rim  # noqa: E402
-from pipeline import repair_frames, render_video, video_frame_size  # noqa: E402
+from Ball import Ball
+from Frame import Frame 
+from Player import Player
+from Rim import Rim 
+from pipeline import repair_frames, render_video, video_frame_size
 
 DEBUG_DIR = "mock/debug_outputs"
 UPLOAD_CHUNK_SIZE = 1024 * 1024

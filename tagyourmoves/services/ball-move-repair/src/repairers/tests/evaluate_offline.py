@@ -10,6 +10,7 @@ Usage:
     python evaluate_offline.py --videos test_vod2.mp4 --trials 10 --no-lk
 """
 import os
+import sys
 import argparse
 import random
 import numpy as np
@@ -18,10 +19,17 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 
+# Same import path as test_offline.py sets up. Repeated here rather than relying on importing
+# test_offline first, so reordering the imports below can't break this file
+REPAIRERS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPAIRERS_DIR, "contracts"))
+sys.path.insert(0, os.path.join(REPAIRERS_DIR, "offline"))
+
 from Frame import Frame
 from Offline import estimate_missing_balls_offline
 from test_offline import (detect_video, load_detections, apply_optical_flow, default_cache_path,
-                          camera_motion_for, default_camera_cache_path, DEFAULT_MODEL, DEFAULT_IMGSZ)
+                          camera_motion_for, default_camera_cache_path, DEFAULT_MODEL, DEFAULT_IMGSZ,
+                          MODELS_DIR)
 
 
 @dataclass
@@ -329,7 +337,7 @@ if __name__ == "__main__":
     for video in args.videos:
         evaluate(
             os.path.join(script_dir, video),
-            os.path.join(script_dir, args.model),
+            os.path.join(MODELS_DIR, args.model),
             default_estimator(args.max_gap),
             hint_pass=None if args.no_lk else apply_optical_flow,
             trials=args.trials,

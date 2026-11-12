@@ -1,10 +1,22 @@
 import os
 import re
+import sys
 import json
 import cv2
 import numpy as np
 from typing import List, Optional
 from ultralytics import YOLO
+
+# The repair code and its Frame/Ball/Player/Rim classes import each other by bare module name
+# (e.g. `from Ball import Ball` inside Frame.py, which can't be changed), so this script puts
+# their folders on the import path itself: it runs from tests/, which Python doesn't search
+REPAIRERS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPAIRERS_DIR, "contracts"))
+sys.path.insert(0, os.path.join(REPAIRERS_DIR, "offline"))
+
+# Detector weights live in the service's moduls/ folder, outside src/, so they aren't
+# mixed with code and aren't copied into the Docker image
+MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(REPAIRERS_DIR)), "moduls")
 
 from Ball import Ball
 from Player import Player
@@ -253,7 +265,7 @@ def require_model(model_path: str):
     if not os.path.exists(model_path):
         raise FileNotFoundError(
             f"Detector weights not found: {model_path}\n"
-            f"Put the weights file next to test_offline.py or change DEFAULT_MODEL"
+            f"Put the weights file in {MODELS_DIR} or change DEFAULT_MODEL"
         )
 
 
@@ -297,6 +309,6 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     input_path = os.path.join(script_dir, "test_vod2.mp4")
     output_path = os.path.join(script_dir, "output_interpolated.mp4")
-    weights_path = os.path.join(script_dir, DEFAULT_MODEL)
+    weights_path = os.path.join(MODELS_DIR, DEFAULT_MODEL)
 
     test_offline_estimation(input_path, output_path, weights_path, imgsz=DEFAULT_IMGSZ)

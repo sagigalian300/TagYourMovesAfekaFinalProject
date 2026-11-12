@@ -231,20 +231,19 @@ pip install -r requirements-dev.txt
 Use a separate environment from the service if you can: the dev file installs the full
 `opencv-python`, and having it next to `opencv-python-headless` breaks `cv2`.
 
-Put the test videos (`test_vod.mp4`, `test_vod2.mp4`, ...) and the detector weights
-(`yolo26s.pt` by default) in `src/repairers/offline/`. Videos are git-ignored.
+Put the test videos (`test_vod.mp4`, `test_vod2.mp4`, ...) in `src/repairers/tests/` and the
+detector weights (`yolo26s.pt` by default) in `moduls/`. Videos are git-ignored. The scripts find
+both on their own, so they can be run from any folder; the commands below run from the service root.
 
 ### `test_offline.py`: full pipeline on a video
 
 ```bash
-cd src/repairers/offline
-```
-```bash
-python test_offline.py
+python src/repairers/tests/test_offline.py
 ```
 
 Runs detection, camera motion, optical flow and estimation on `test_vod2.mp4`, and writes
-`output_interpolated.mp4` with **green boxes for detections** and **red boxes for estimates**.
+`output_interpolated.mp4` next to it in `tests/`, with **green boxes for detections** and
+**red boxes for estimates**.
 
 Results are cached next to the video (`<video>.<model>-<imgsz>.detections.json` and
 `<video>.camera.npy`), so only the first run is slow. Delete the caches after changing the
@@ -257,13 +256,13 @@ stretches where the detector saw the ball confidently, runs the estimator, and m
 the estimates land from the hidden detections.
 
 ```bash
-python evaluate_offline.py --no-lk --trials 30
+python src/repairers/tests/evaluate_offline.py --no-lk --trials 30
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--videos` | `test_vod.mp4 test_vod2.mp4` | Videos to evaluate. |
-| `--model` | `yolo26s.pt` | Detector weights. |
+| `--videos` | `test_vod.mp4 test_vod2.mp4` | Videos to evaluate, from `src/repairers/tests/`. |
+| `--model` | `yolo26s.pt` | Detector weights, from `moduls/`. |
 | `--imgsz` | `1280` for the default model | Detector input size. |
 | `--trials` | `5` | Random trials per video. |
 | `--max-gap` | `45` | Longest gap filled. |
@@ -287,7 +286,7 @@ Any Ultralytics model works (`.pt`, `.onnx`, ...). Classes are matched **by name
 | Rim | `rim`, `hoop`, `basket` |
 | Player | `person`, `human`, `player`, `referee`, and names like `red_23` or `refree_1` |
 
-1. Put the weights in `src/repairers/offline/`.
+1. Put the weights in `moduls/`.
 2. Check its class names:
    ```bash
    python -c "from ultralytics import YOLO; print(YOLO('your_model.pt').names)"
@@ -313,21 +312,28 @@ ball-move-repair/
 ├── requirements-dev.txt       Extra dependencies for the local scripts (YOLO)
 ├── .dockerignore              Keeps videos, weights and caches out of the image
 ├── mock/debug_outputs/        Debug videos written when debug=true (git-ignored)
-└── src/repairers/offline/
-    ├── pipeline.py            repair_frames(): runs the steps below; used by main.py
-    ├── Offline.py             Track selection, player tracking, Kalman smoothing, gap filling
-    ├── CameraMotion.py        Camera pan estimation and coordinate conversion
-    ├── OpticalFlowTracker.py  Short-range Lucas-Kanade ball tracker
-    ├── Ball.py, Frame.py,     Contract classes (copies of the shared contract;
-    │   Player.py, Rim.py        do not modify)
-    ├── test_offline.py        Local end-to-end run with YOLO detection and rendering
-    └── evaluate_offline.py    Accuracy evaluation on hidden detections
+├── moduls/                    Detector weights for the local scripts (yolo26s.pt, ...)
+└── src/repairers/
+    ├── contracts/             Contract classes shared between services (do not modify)
+    │   └── Ball.py, Frame.py, Player.py, Rim.py
+    ├── offline/               The estimation algorithm, used by main.py
+    │   ├── pipeline.py            repair_frames(): runs the steps below
+    │   ├── Offline.py             Track selection, player tracking, Kalman smoothing, gap filling
+    │   ├── CameraMotion.py        Camera pan estimation and coordinate conversion
+    │   └── OpticalFlowTracker.py  Short-range Lucas-Kanade ball tracker
+    └── tests/                 Local scripts and test videos (not used by the service)
+        ├── test_offline.py        End-to-end run with YOLO detection and rendering
+        └── evaluate_offline.py    Accuracy evaluation on hidden detections
 ```
 
 `Ball.py`, `Frame.py`, `Player.py` and `Rim.py` are part of the shared contract between services
 and must not be changed. The shared `contracts/` folder at the repository root is still empty on
-this branch, so the service uses these copies. When the shared contracts are filled in, only the
-imports in `main.py` need to change.
+this branch, so the service uses its own copies in `src/repairers/contracts/`.
+
+The code imports these modules by their bare names (for example `Frame.py` does
+`from Ball import Ball`), so every entry point puts `contracts/` and `offline/` on Python's
+import path itself: `main.py`, `test_offline.py` and `evaluate_offline.py`. Those few lines at
+the top of each file are the only place to change if the folders move again.
 
 ---
 
