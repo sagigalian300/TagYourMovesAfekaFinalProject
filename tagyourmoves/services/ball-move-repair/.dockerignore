@@ -1,0 +1,8 @@
+# Test data, model weights and caches are not needed by the service
+**/*.mp4
+**/*.pt
+**/*.onnx
+**/*.detections.json
+**/*.camera.npy
+**/__pycache__
+mock/
