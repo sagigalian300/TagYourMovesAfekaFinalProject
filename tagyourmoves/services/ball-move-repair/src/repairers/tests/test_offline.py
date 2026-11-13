@@ -13,15 +13,15 @@ REPAIRERS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPAIRERS_DIR, "contracts"))
 sys.path.insert(0, os.path.join(REPAIRERS_DIR, "offline"))
 
-# Detector weights live in the service's moduls/ folder, outside src/, so they aren't
+# Detector weights live in the service's modules/ folder, outside src/, so they aren't
 # mixed with code and aren't copied into the Docker image
-MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(REPAIRERS_DIR)), "moduls")
+MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(REPAIRERS_DIR)), "modules")
 
 from Ball import Ball
 from Player import Player
 from Rim import Rim
 from Frame import Frame
-from pipeline import repair_frames
+from Offline import repair_frames
 
 # Detector used by the local test scripts. Any Ultralytics model works, since classes are
 # matched by name below. 1280 instead of the default 640 because the ball is small: at 640 a

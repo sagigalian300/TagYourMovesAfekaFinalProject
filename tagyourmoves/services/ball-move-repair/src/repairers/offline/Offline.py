@@ -6,7 +6,7 @@ from filterpy.common import Q_discrete_white_noise
 
 from Frame import Frame
 from Ball import Ball
-from CameraMotion import to_reference, from_reference
+from CameraMotion import estimate_camera_motion, to_reference, from_reference
 
 # All distances below are expressed in ball diameters, so they scale with zoom / resolution.
 MAX_SPEED = 2.5             # Max plausible ball motion between consecutive frames (sets the Kalman's starting doubt)
@@ -18,6 +18,35 @@ ONE_SIDED_FRAMES = 10       # Frames to follow the holder when only one side of 
 PLAYER_IOU = 0.3            # Min IoU to link a player box to an existing player track
 PLAYER_MAX_MISS = 5         # Frames a player track survives without a matching detection
 PLAYER_SMOOTHING = 9        # Moving-average window for player boxes (they jitter with arms and legs)
+
+
+def repair_frames(
+    frames: List[Frame],
+    frame_size: Optional[Tuple[int, int]] = None,
+    max_gap_frames: int = 45,
+) -> List[Frame]:
+    """
+    Estimates the ball in every frame where it is missing: the entry point the service calls.
+
+    Measures the camera's movement from the rims, then runs the estimator in camera-stabilized
+    coordinates. Works from the frame list alone; no video is needed.
+
+    Args:
+        frames (List[Frame]): All frames in video order, one per video frame. Modified in place.
+        frame_size (Optional[Tuple[int, int]], optional): (width, height), used to keep estimates
+            inside the frame. Defaults to None.
+        max_gap_frames (int, optional): Longest gap that is filled end to end. Defaults to 45.
+
+    Returns:
+        List[Frame]: The same frames with estimated balls (confidence 0.0) in place of the
+            missing ones; balls that were present are left untouched.
+    """
+    # None when fewer than two frames show a rim: the estimator then works in image coordinates,
+    # which is right for a still camera and the best that can be done for a moving one
+    camera_motion = estimate_camera_motion(frames)
+    return estimate_missing_balls_offline(
+        frames, max_gap_frames=max_gap_frames, frame_size=frame_size, camera_motion=camera_motion
+    )
 
 
 def estimate_missing_balls_offline(

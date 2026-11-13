@@ -14,15 +14,15 @@ import json
 import argparse
 from typing import Optional, Tuple
 
-# main.py lives in the service root and the repair code imports its modules by bare name
+# main.py lives in src/ and the repair code imports its modules by bare name
 # (e.g. `from Ball import Ball` inside Frame.py), so all three folders go on the import path.
 # They are found from this file's location, so the script works from any folder.
 REPAIRERS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVICE_DIR = os.path.dirname(os.path.dirname(REPAIRERS_DIR))
-sys.path[:0] = [SERVICE_DIR, os.path.join(REPAIRERS_DIR, "contracts"), os.path.join(REPAIRERS_DIR, "offline")]
+SRC_DIR = os.path.dirname(REPAIRERS_DIR)
+sys.path[:0] = [SRC_DIR, os.path.join(REPAIRERS_DIR, "contracts"), os.path.join(REPAIRERS_DIR, "offline")]
 
 from main import parse_frames, build_response
-from pipeline import repair_frames
+from Offline import repair_frames
 
 
 def repair_file(path: str, frame_size: Optional[Tuple[int, int]] = None, max_gap_frames: int = 45) -> str:

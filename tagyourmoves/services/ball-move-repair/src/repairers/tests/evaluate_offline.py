@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(REPAIRERS_DIR, "contracts"))
 sys.path.insert(0, os.path.join(REPAIRERS_DIR, "offline"))
 
 from Frame import Frame
-from pipeline import repair_frames
+from Offline import repair_frames
 from test_offline import (detect_video, load_detections, default_cache_path, video_frame_size,
                           DEFAULT_MODEL, DEFAULT_IMGSZ, MODELS_DIR)
 
@@ -274,7 +274,7 @@ def evaluate(
 
 def default_estimator(max_gap_frames: int = 45) -> Estimator:
     """
-    Wraps the service's repair (pipeline.repair_frames) as an Estimator, so what is measured
+    Wraps the service's repair (Offline.repair_frames) as an Estimator, so what is measured
     is exactly what the service does.
 
     Args:

@@ -12,12 +12,13 @@ COPY requirements.txt .
 # Downloads the python dependencies in the requirements.txt we copied in the command above
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copies the service code (main.py and src/); videos, weights and caches are excluded by .dockerignore
+# Copies the service code (everything lives in src/); videos, weights and caches are excluded by .dockerignore
 COPY . .
 
-# The FastAPI server listens on port 8003
+# The FastAPI server listens on port 8003. main.py is in src/, so uvicorn is told to look there
+# (--app-dir) rather than changing the working directory, which keeps paths in the image simple
 EXPOSE 8003
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8003"]
 
 
 # How to build docker image:

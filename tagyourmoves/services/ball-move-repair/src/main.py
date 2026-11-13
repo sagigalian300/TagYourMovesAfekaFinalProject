@@ -18,7 +18,7 @@ from fastapi.concurrency import run_in_threadpool
 # The repair code and its Frame/Ball/Player/Rim classes import each other by bare module
 # name (e.g. `from Ball import Ball` inside Frame.py, which can't be changed), so both their
 # folders have to be on the import path: contracts/ for the shared classes, offline/ for the algorithm
-REPAIRERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "repairers")
+REPAIRERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "repairers")
 sys.path.insert(0, os.path.join(REPAIRERS_DIR, "contracts"))
 sys.path.insert(0, os.path.join(REPAIRERS_DIR, "offline"))
 
@@ -26,7 +26,7 @@ from Ball import Ball
 from Frame import Frame 
 from Player import Player
 from Rim import Rim 
-from pipeline import repair_frames
+from Offline import repair_frames
 
 app =FastAPI(title="Ball Move Repair Microservice")
 

@@ -185,7 +185,7 @@ curl -X POST http://localhost:8003/repair-ball -F "frames_data=@frames.json;type
 pip install -r requirements.txt
 ```
 ```bash
-uvicorn main:app --port 8003
+uvicorn main:app --app-dir src --port 8003
 ```
 
 ### With Docker
@@ -228,7 +228,7 @@ pip install -r requirements-dev.txt
 ```
 
 Put the test videos (`test_vod.mp4`, `test_vod2.mp4`, ...) in `src/repairers/tests/` and the
-detector weights (`yolo26s.pt` by default) in `moduls/`. Videos are git-ignored. The scripts find
+detector weights (`yolo26s.pt` by default) in `modules/`. Videos are git-ignored. The scripts find
 both on their own, so they can be run from any folder; the commands below run from the service root.
 
 ### `test_offline.py`: full pipeline on a video
@@ -257,7 +257,7 @@ python src/repairers/tests/evaluate_offline.py --trials 30
 | Option | Default | Meaning |
 |---|---|---|
 | `--videos` | `test_vod.mp4 test_vod2.mp4` | Videos to evaluate, from `src/repairers/tests/`. |
-| `--model` | `yolo26s.pt` | Detector weights, from `moduls/`. |
+| `--model` | `yolo26s.pt` | Detector weights, from `modules/`. |
 | `--imgsz` | `1280` for the default model | Detector input size. |
 | `--trials` | `5` | Random trials per video. |
 | `--max-gap` | `45` | Longest gap filled. |
@@ -284,7 +284,7 @@ Any Ultralytics model works (`.pt`, `.onnx`, ...). Classes are matched **by name
 | Rim | `rim`, `hoop`, `basket` |
 | Player | `person`, `human`, `player`, `referee`, and names like `red_23` or `refree_1` |
 
-1. Put the weights in `moduls/`.
+1. Put the weights in `modules/`.
 2. Check its class names:
    ```bash
    python -c "from ultralytics import YOLO; print(YOLO('your_model.pt').names)"
@@ -303,23 +303,24 @@ To test camera motion locally, use a model with a rim class: COCO models have no
 
 ```
 ball-move-repair/
-├── main.py                    FastAPI app: endpoints, request parsing and validation
 ├── Dockerfile                 Service image (python:3.10-slim, uvicorn on port 8003)
 ├── requirements.txt           Service dependencies
 ├── requirements-dev.txt       Extra dependencies for the local scripts (YOLO, OpenCV)
 ├── .dockerignore              Keeps videos, weights and caches out of the image
-├── moduls/                    Detector weights for the local scripts (yolo26s.pt, ...)
-└── src/repairers/
-    ├── contracts/             Contract classes shared between services (do not modify)
-    │   └── Ball.py, Frame.py, Player.py, Rim.py
-    ├── offline/               The estimation algorithm, used by main.py
-    │   ├── pipeline.py            repair_frames(): camera motion, then the estimator
-    │   ├── CameraMotion.py        Camera pan from the rims, and coordinate conversion
-    │   └── Offline.py             Player tracking, Kalman smoothing, gap filling
-    └── tests/                 Local scripts and test videos (not used by the service)
-        ├── repair_only.py         Repair a frames JSON file without the server
-        ├── test_offline.py        End-to-end run with YOLO detection and rendering
-        └── evaluate_offline.py    Accuracy evaluation on hidden detections
+├── modules/                   Detector weights for the local scripts (yolo26s.pt, ...)
+└── src/                       All code
+    ├── main.py                FastAPI app: endpoints, request parsing and validation
+    └── repairers/
+        ├── contracts/             Contract classes shared between services (do not modify)
+        │   └── Ball.py, Frame.py, Player.py, Rim.py
+        ├── offline/               The estimation algorithm, used by main.py
+        │   ├── Offline.py             repair_frames() (the entry point), player tracking,
+        │   │                          Kalman smoothing, gap filling
+        │   └── CameraMotion.py        Camera pan from the rims, and coordinate conversion
+        └── tests/                 Local scripts and test videos (not used by the service)
+            ├── repair_only.py         Repair a frames JSON file without the server
+            ├── test_offline.py        End-to-end run with YOLO detection and rendering
+            └── evaluate_offline.py    Accuracy evaluation on hidden detections
 ```
 
 `Ball.py`, `Frame.py`, `Player.py` and `Rim.py` are part of the shared contract between services
@@ -328,8 +329,8 @@ this branch, so the service uses its own copies in `src/repairers/contracts/`.
 
 The code imports these modules by their bare names (for example `Frame.py` does
 `from Ball import Ball`), so every entry point puts `contracts/` and `offline/` on Python's
-import path itself: `main.py`, `test_offline.py` and `evaluate_offline.py`. Those few lines at
-the top of each file are the only place to change if the folders move again.
+import path itself: `main.py`, `repair_only.py`, `test_offline.py` and `evaluate_offline.py`.
+Those few lines at the top of each file are the only place to change if the folders move again.
 
 ---
 
