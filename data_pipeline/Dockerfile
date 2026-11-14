@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Set the default command to run the script
 # We will mount the project root to /app when running the container
-CMD ["python", "data_pipeline/download_and_split.py"]
+CMD ["python", "data_pipeline/download_and_split_clips.py"]

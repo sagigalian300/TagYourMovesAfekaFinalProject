@@ -1,4 +1,3 @@
-import os
 import subprocess
 from pathlib import Path
 
@@ -8,17 +7,17 @@ def get_project_root() -> Path:
 
 def mirror_videos(input_dir: Path, output_dir: Path):
     """
-    Applies a horizontal flip (mirror) augmentation to all MP4 videos in the input directory.
-    Uses ffmpeg for fast processing.
+    Horizontally mirror unaugmented MP4 clips into the output directory.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Find all mp4 files in the input directory
-    video_files = [f for f in input_dir.iterdir() if f.suffix.lower() == '.mp4']
+    video_files = [
+        f for f in input_dir.iterdir()
+        if f.suffix.lower() == ".mp4" and not f.stem.endswith("_mirrored")
+    ]
     print(f"Found {len(video_files)} videos to augment.")
     
     for video_path in video_files:
-        # Create the output filename, e.g., clip_001_mirrored.mp4
         out_filename = f"{video_path.stem}_mirrored{video_path.suffix}"
         output_path = output_dir / out_filename
         
@@ -35,18 +34,20 @@ def mirror_videos(input_dir: Path, output_dir: Path):
         
         print(f"Mirroring {video_path.name} -> {out_filename}...")
         # Run the ffmpeg command. Hiding standard output to keep the console clean.
-        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            check=True
+        )
         
-    print(f"\nSuccess! All mirrored videos saved to '{output_dir.name}/'")
+    print(f"\nMirrored videos saved to '{output_dir}'.")
 
 def main():
     root_dir = get_project_root()
     
-    # Updated to match your exact folder name
-    input_folder = root_dir / "data" / "dataset_clips" / "successful_3_point_shooting"
-    
-    # New folder for the augmented videos to keep them strictly separated
-    output_folder = root_dir / "data" / "dataset_clips" / "successful_3_point_shooting_mirrored"
+    clips_folder = root_dir / "data" / "dataset_clips"
+    input_folder = clips_folder / "successful_3_point_shooting"
+    output_folder = clips_folder / "successful_3_point_shooting_mirrored"
     
     mirror_videos(input_folder, output_folder)
 
