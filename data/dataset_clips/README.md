@@ -30,3 +30,5 @@ clip_nba_diverse_threes_0001_unknown_unknown.mp4
 ```
 
 Use lowercase letters, digits, and underscores, and keep the field order consistent. The clip-splitting pipeline uses the source video filename as the `source-id`, numbers clips from `0001`, and sets both labels to `unknown` until they are annotated. A different source video gets a different `source-id`, so its clip IDs can start from `0001` without colliding with clips from other sources.
+
+The current labeled clips are numbered sequentially from `0001` to `0057` in their original clip order. Each mirrored clip keeps the same ID as its original.
