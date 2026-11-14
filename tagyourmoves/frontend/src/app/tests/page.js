@@ -3,9 +3,11 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import TestCard from '@/components/tests/TestCard';
+
 import ObjectDetection from '@/components/tests/ObjectDetection';
 import TeamAssignment from '@/components/tests/TeamAssignment';
 import TrackerTest from '@/components/tests/TrackerTest';
+import BallRepair from '@/components/tests/BallRepair';
 
 export default function TestsPage() {
   const [activeTab, setActiveTab] = useState('object-detection');
@@ -71,6 +73,18 @@ export default function TestsPage() {
               <span className="absolute bottom-0 left-0 w-full h-0.5 bg-black rounded-t-md" />
             )}
           </button>
+
+          <button
+            onClick={() => setActiveTab('ball-repair')}
+            className={`pb-3 text-sm font-medium transition-colors relative ${
+              activeTab === 'ball-repair' ? 'text-black' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Ball Repair
+            {activeTab === 'ball-repair' && (
+              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-black rounded-t-md" />
+            )}
+          </button>
         </div>
 
         {/* Active Test Content */}
@@ -102,6 +116,16 @@ export default function TestsPage() {
               icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>}
             >
               <TrackerTest />
+            </TestCard>
+          )}
+
+          {activeTab === 'ball-repair' && (
+            <TestCard 
+              title="Ball Move Repair MS"
+              description="Offline Kalman filter and camera motion to estimate missing balls."
+              icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>}
+            >
+              <BallRepair />
             </TestCard>
           )}
         </div>

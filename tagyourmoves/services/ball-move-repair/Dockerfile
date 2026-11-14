@@ -15,17 +15,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copies the service code (everything lives in src/); videos, weights and caches are excluded by .dockerignore
 COPY . .
 
-# The FastAPI server listens on port 8003. main.py is in src/, so uvicorn is told to look there
+# The FastAPI server listens on port 8000. main.py is in src/, so uvicorn is told to look there
 # (--app-dir) rather than changing the working directory, which keeps paths in the image simple
-EXPOSE 8003
-CMD ["uvicorn", "main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8003"]
-
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
 
 # How to build docker image:
 # docker will create an image named "tagyourmoves-ball-move-repair" and tells that the '.' (current) directory is the working space for the image
     # docker build -t tagyourmoves-ball-move-repair .
 
 # How to run docker container:
-# docker will create a copy of the image (container) that will be removed automatically afterwards, and maps port 8003 of the container to port 8003 of this computer.
-    # docker run --rm -p 8003:8003 tagyourmoves-ball-move-repair
+# docker will create a copy of the image (container) that will be removed automatically afterwards, and maps port 8000 of the container to port 8003 of this computer.
+    # docker run --rm -p 8003:8000 tagyourmoves-ball-move-repair
 # then the API docs are at http://localhost:8003/docs

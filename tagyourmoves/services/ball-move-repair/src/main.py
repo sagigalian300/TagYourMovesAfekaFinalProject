@@ -14,6 +14,7 @@ from typing import List, Optional, Tuple
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 
 # The repair code and its Frame/Ball/Player/Rim classes import each other by bare module
 # name (e.g. `from Ball import Ball` inside Frame.py, which can't be changed), so both their
@@ -28,8 +29,14 @@ from Player import Player
 from Rim import Rim 
 from Offline import repair_frames
 
-app =FastAPI(title="Ball Move Repair Microservice")
-
+app = FastAPI(title="Ball Move Repair Microservice")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def _from_dict(cls, data: dict):
     """Builds a contract object from its JSON dict.
