@@ -1,0 +1,6 @@
+# Only for the local scripts in src/repairers/tests, which run YOLO and read the test videos
+# themselves. The service in main.py only needs requirements.txt.
+-r requirements.txt
+opencv-python
+ultralytics
+onnxruntime
