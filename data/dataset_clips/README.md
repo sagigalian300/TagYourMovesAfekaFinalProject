@@ -14,7 +14,7 @@ clip_<source-id>_<clip-id>_<shot-type>_<result>[_<augmentation>].mp4
 
 Fields:
 
-- `source-id`: the source video's filename without its extension, in lowercase (for example, `nba_diverse_threes`).
+- `source-id`: the source video's filename without its extension, in lowercase (for example, `nba_diverse_threes`) if video name is unknown (for example lost the video) replace the this with "unknown_by_<author>" for example "unknown_by_sagi".
 - `clip-id`: four-digit clip identifier, zero-padded (for example, `0001` or `0121`). Keep the same ID for a clip and its augmented versions.
 - `shot-type`: shot distance, such as `2pt` or `3pt`. Use `unknown` until the clip is labeled.
 - `result`: `made` or `missed`. Use `unknown` until the clip is labeled.
