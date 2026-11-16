@@ -80,6 +80,6 @@ def test_full_pipeline(image_path: str) -> None:
 
 if __name__ == "__main__":
     # TODO: Change this to the path of a real image on your computer
-    TEST_IMAGE = "img1.png" 
+    TEST_IMAGE = "img.png" 
     
     test_full_pipeline(TEST_IMAGE)

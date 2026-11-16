@@ -28,3 +28,5 @@ CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # if you want to run on GPU - you need to tell docker to use the GPU.. notice you must have "nvidia-container-toolkit" check this by running "docker run --rm --gpus all ubuntu nvidia-smi"
     # docker run --rm --gpus all -p 8000:8000 -v "${PWD}:/app" -e PYTHONPATH=/app -e PYTHONUNBUFFERED=1 tagyourmoves-team-assignment uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+# for afeka machine
+    # sudo docker run --rm --runtime=nvidia --gpus all -p 8000:8000 -v "${PWD}:/app" -e PYTHONPATH=/app -e PYTHONUNBUFFERED=1 tagyourmoves-team-assignment uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload

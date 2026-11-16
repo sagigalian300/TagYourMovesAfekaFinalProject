@@ -1,9 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+torch==2.4.0+cu118
+torchvision==0.19.0+cu118
+
 ultralytics
 scikit-learn
 
-transformers
-torch
-torchvision
+transformers<=4.48.3
 Pillow
 
 fastapi
