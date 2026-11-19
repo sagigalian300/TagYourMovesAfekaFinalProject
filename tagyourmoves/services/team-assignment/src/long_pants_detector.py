@@ -4,55 +4,65 @@ Module for detecting if a person is wearing long pants (identifying referees).
 
 import cv2
 import numpy as np
-from src.clothing_segmentation import ClothingSegmenter
 
 
-def has_long_pants(player_crop: np.ndarray, pred_seg: np.ndarray) -> bool:
-    """Determines if a person is wearing long pants using a hybrid approach.
+def has_long_pants(
+    player_crop: np.ndarray,
+    pred_seg: np.ndarray
+) -> tuple[bool, float, float, np.ndarray]:
+    """Determines if a person is wearing long dark pants using a hybrid approach.
 
     Uses the pre-computed SegFormer mask to isolate the person from the background,
-    then applies HSV skin-tone detection on the lower 40% of the isolated person.
+    then inspects the shin/calf window (60% to 88% of crop height, excluding shoes)
+    for both low skin-tone ratio and high dark-pixel ratio.
 
     Args:
         player_crop (np.ndarray): The cropped BGR image of the person.
         pred_seg (np.ndarray): Pre-computed 2D segmentation mask with class IDs.
 
     Returns:
-        bool: True if the person is wearing long pants (referee), False otherwise.
+        tuple[bool, float, float, np.ndarray]: A tuple containing:
+            - bool: True if the person is wearing long dark pants (referee), False otherwise.
+            - float: The calculated skin-to-lower-body pixel ratio (0.0 to 1.0).
+            - float: The calculated dark-to-lower-body pixel ratio (0.0 to 1.0).
+            - np.ndarray: Binary mask of detected skin pixels in the 60%–88% region.
     """
     if player_crop.size == 0 or pred_seg.size == 0:
-        return False
+        return False, 0.0, 0.0, np.array([])
 
     person_mask = (pred_seg != 0).astype(np.uint8)
-    
-    # 3. Focus on the bottom 40% of the crop (where the legs are)
+
     h, w = player_crop.shape[:2]
-    split_y = int(h * 0.6)
-    
-    lower_body_img = player_crop[split_y:, :]
-    lower_person_mask = person_mask[split_y:, :]
-    
-    # Count how many pixels actually belong to the person in this lower section
+    split_top = int(h * 0.60)
+    split_bottom = int(h * 0.88)
+
+    if split_bottom <= split_top:
+        return False, 0.0, 0.0, np.array([])
+
+    lower_body_img = player_crop[split_top:split_bottom, :]
+    lower_person_mask = person_mask[split_top:split_bottom, :]
+
     lower_person_pixels = np.sum(lower_person_mask)
     if lower_person_pixels == 0:
-        return False
-        
-    # 4. Detect Skin Tones (HSV) ONLY inside the person's silhouette
+        return False, 0.0, 0.0, np.array([])
+
     hsv_lower = cv2.cvtColor(lower_body_img, cv2.COLOR_BGR2HSV)
-    
-    # Broad HSV range for skin tones (covers light to dark skin)
+
+    # 1. Skin-tone detection inside the person's silhouette
     lower_skin = np.array([0, 20, 50], dtype=np.uint8)
     upper_skin = np.array([25, 170, 255], dtype=np.uint8)
-    
+
     skin_mask_hsv = cv2.inRange(hsv_lower, lower_skin, upper_skin)
-    
-    # INTERSECTION: Pixels that are skin color AND belong to the person (not the floor)
     valid_skin_mask = cv2.bitwise_and(skin_mask_hsv, skin_mask_hsv, mask=lower_person_mask)
     skin_pixels = cv2.countNonZero(valid_skin_mask)
-    
-    # 5. Calculate the ratio of skin relative to the person's lower body area
-    skin_ratio = skin_pixels / lower_person_pixels
-    
-    # Referees (long pants) will have almost 0 skin. Players will have a high ratio.
-    # If skin is less than 5% of their visible lower body, they wear long pants.
-    return skin_ratio < 0.05
+    skin_ratio = float(skin_pixels / lower_person_pixels)
+
+    # 2. Dark/black pants detection (low Value channel in HSV) inside the silhouette
+    v_channel = hsv_lower[:, :, 2]
+    dark_mask = ((v_channel < 80) & (lower_person_mask > 0)).astype(np.uint8)
+    dark_pixels = int(np.sum(dark_mask))
+    dark_ratio = float(dark_pixels / lower_person_pixels)
+
+    is_referee = (skin_ratio < 0.15) and (dark_ratio > 0.45)
+
+    return is_referee, skin_ratio, dark_ratio, valid_skin_mask

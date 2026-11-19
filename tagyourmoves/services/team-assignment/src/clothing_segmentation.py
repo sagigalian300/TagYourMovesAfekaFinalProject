@@ -16,7 +16,7 @@ class ClothingSegmenter:
     methods to retrieve raw segmentation masks for downstream extractors/detectors.
     """
 
-    def __init__(self, model_name: str = "mattmdjaga/segformer_b2_clothes"):
+    def __init__(self, model_name: str = "matei-dorian/segformer-b5-finetuned-human-parsing"):
         """Initializes the processor and model."""
         print(f"[ClothingSegmenter] Loading model '{model_name}'...")
         self.processor = SegformerImageProcessor.from_pretrained(model_name)

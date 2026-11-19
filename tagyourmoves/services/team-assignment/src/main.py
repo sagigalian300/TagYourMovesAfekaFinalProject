@@ -19,9 +19,14 @@ from src.clothing_segmentation import ClothingSegmenter
 from src.long_pants_detector import has_long_pants
 from src.shirt_extractor import extract_shirt_from_player
 from src.team_clustering import assign_teams_to_players
+from src.debug_visualizer import save_debug_frame
+
+# Gloabl flag: if True segmentation results will be saved as an image for debug
+DEBUG_MODE = True
 
 # Global dictionary to hold the AI model in memory while the server runs
 shared_resources = {}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -67,7 +72,8 @@ def process_frame(image: np.ndarray, current_frame: Frame, segmenter: ClothingSe
 
     Iterates through the players in the frame, identifies referees using 
     semantic segmentation, extracts shirt crops for actual players, and 
-    assigns team IDs using clustering.
+    assigns team IDs using clustering. Optionally saves a visual debug frame 
+    when DEBUG_MODE is enabled.
 
     Args:
         image (np.ndarray): The raw image array (BGR format).
@@ -79,6 +85,7 @@ def process_frame(image: np.ndarray, current_frame: Frame, segmenter: ClothingSe
     """
     shirt_crops = []
     valid_players = []
+    debug_records = []
     img_height, img_width = image.shape[:2]
 
     for player in current_frame.players:
@@ -89,25 +96,38 @@ def process_frame(image: np.ndarray, current_frame: Frame, segmenter: ClothingSe
         if player_crop.size == 0:
             continue
 
-        # Run segmentation ONCE per player
         pred_seg = segmenter.get_segmentation_mask(player_crop)
         if pred_seg.size == 0:
             continue
 
-        # Filter Referees using the pre-computed mask
-        if has_long_pants(player_crop, pred_seg):
+        is_referee, skin_ratio, dark_ratio, skin_mask = has_long_pants(player_crop, pred_seg)
+
+        if DEBUG_MODE:
+            debug_records.append({
+                "player": player,
+                "box": (p_x1, p_y1, p_x2, p_y2),
+                "pred_seg": pred_seg,
+                "skin_ratio": skin_ratio,
+                "dark_ratio": dark_ratio,
+                "skin_mask": skin_mask,
+            })
+
+        if is_referee:
             player.team = 0
             continue
 
-        # Extract shirts using the same pre-computed mask
         shirt_crop = extract_shirt_from_player(player_crop, pred_seg)
         if shirt_crop.size > 0:
             shirt_crops.append(shirt_crop)
             valid_players.append(player)
             
-    # Cluster valid players into teams
-    assign_teams_to_players(valid_players, shirt_crops)
-    
+    dominant_colors_bgr = assign_teams_to_players(valid_players, shirt_crops)
+
+    if DEBUG_MODE and debug_records:
+        for record in debug_records:
+            record["dominant_color_bgr"] = dominant_colors_bgr.get(id(record["player"]))
+        save_debug_frame(image, debug_records)
+
     return current_frame
 
 @app.post("/assign-teams")
