@@ -7,30 +7,22 @@ import numpy as np
 from src.clothing_segmentation import ClothingSegmenter
 
 
-def has_long_pants(player_crop: np.ndarray, segmenter: ClothingSegmenter) -> bool:
+def has_long_pants(player_crop: np.ndarray, pred_seg: np.ndarray) -> bool:
     """Determines if a person is wearing long pants using a hybrid approach.
 
-    Uses SegFormer strictly to isolate the person from the background (floor/crowd).
-    Then applies HSV skin-tone detection on the lower 40% of the isolated person 
-    to robustly check for bare legs, ignoring the model's confused clothing labels.
+    Uses the pre-computed SegFormer mask to isolate the person from the background,
+    then applies HSV skin-tone detection on the lower 40% of the isolated person.
 
     Args:
         player_crop (np.ndarray): The cropped BGR image of the person.
-        segmenter (ClothingSegmenter): The shared segmentation model instance.
+        pred_seg (np.ndarray): Pre-computed 2D segmentation mask with class IDs.
 
     Returns:
         bool: True if the person is wearing long pants (referee), False otherwise.
     """
-    if player_crop.size == 0:
+    if player_crop.size == 0 or pred_seg.size == 0:
         return False
 
-    # 1. Get the segmentation mask
-    pred_seg = segmenter.get_segmentation_mask(player_crop)
-    if pred_seg.size == 0:
-        return False
-        
-    # 2. Create a binary mask of the PERSON (Class 0 is background)
-    # We don't care if it's pants, shirt, or skin - just get the human silhouette
     person_mask = (pred_seg != 0).astype(np.uint8)
     
     # 3. Focus on the bottom 40% of the crop (where the legs are)

@@ -89,13 +89,18 @@ def process_frame(image: np.ndarray, current_frame: Frame, segmenter: ClothingSe
         if player_crop.size == 0:
             continue
 
-        # Filter Referees uniformly using the shared segmenter
-        if has_long_pants(player_crop, segmenter):
+        # Run segmentation ONCE per player
+        pred_seg = segmenter.get_segmentation_mask(player_crop)
+        if pred_seg.size == 0:
+            continue
+
+        # Filter Referees using the pre-computed mask
+        if has_long_pants(player_crop, pred_seg):
             player.team = 0
             continue
 
-        # Extract shirts for valid players uniformly using the shared segmenter
-        shirt_crop = extract_shirt_from_player(image, player, segmenter)
+        # Extract shirts using the same pre-computed mask
+        shirt_crop = extract_shirt_from_player(player_crop, pred_seg)
         if shirt_crop.size > 0:
             shirt_crops.append(shirt_crop)
             valid_players.append(player)

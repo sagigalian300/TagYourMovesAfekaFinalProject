@@ -7,30 +7,18 @@ from contract.player.Player import Player
 from src.clothing_segmentation import ClothingSegmenter
 
 
-def extract_shirt_from_player(image: np.ndarray, player: Player, segmenter: ClothingSegmenter) -> np.ndarray:
-    """Extracts the player from the frame and isolates the shirt.
+def extract_shirt_from_player(player_crop: np.ndarray, pred_seg: np.ndarray) -> np.ndarray:
+    """Isolates the shirt region from a cropped player image using a segmentation mask.
 
     Args:
-        image (np.ndarray): The full original video frame/image.
-        player (Player): The player object containing bounding box coordinates.
-        segmenter (ClothingSegmenter): The shared segmentation model instance.
+        player_crop (np.ndarray): The cropped BGR image of the player.
+        pred_seg (np.ndarray): Pre-computed 2D segmentation mask with class IDs.
 
     Returns:
         np.ndarray: A cropped image of the player where all non-shirt 
             pixels are colored black.
     """
-    img_height, img_width = image.shape[:2]
-    
-    p_x1, p_y1 = max(0, int(player.x1)), max(0, int(player.y1))
-    p_x2, p_y2 = min(img_width, int(player.x2)), min(img_height, int(player.y2))
-    
-    player_crop = image[p_y1:p_y2, p_x1:p_x2]
-    if player_crop.size == 0:
-        return np.array([])
-        
-    # Get the raw mask and isolate the shirt (Class ID 4)
-    pred_seg = segmenter.get_segmentation_mask(player_crop)
-    if pred_seg.size == 0:
+    if player_crop.size == 0 or pred_seg.size == 0:
         return np.array([])
 
     shirt_mask = (pred_seg == 4).astype(np.uint8)
