@@ -21,7 +21,7 @@ from src.shirt_extractor import extract_shirt_from_player
 from src.team_clustering import assign_teams_to_players
 from src.debug_visualizer import save_debug_frame
 
-# Gloabl flag: if True segmentation results will be saved as an image for debug
+# Global flag: if True segmentation results will be saved as an image for debug
 DEBUG_MODE = True
 
 # Global dictionary to hold the AI model in memory while the server runs
@@ -49,7 +49,6 @@ async def lifespan(app: FastAPI):
     except AttributeError:
         print("[Device Check] Couldn't access model.device directly, but CUDA status above indicates capability.")
 
-
     print("[Startup] Server is ready to accept requests.")
     
     yield
@@ -57,15 +56,17 @@ async def lifespan(app: FastAPI):
     print("[Shutdown] Cleaning up resources...")
     shared_resources.clear()
 
+
 app = FastAPI(title="Team Assignment Microservice", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # Allow Next.js frontend
+    allow_origins=["http://localhost:3000"],  # Allow Next.js frontend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 def process_frame(image: np.ndarray, current_frame: Frame, segmenter: ClothingSegmenter) -> Frame:
     """Processes a single frame to assign teams to detected players.
@@ -101,6 +102,15 @@ def process_frame(image: np.ndarray, current_frame: Frame, segmenter: ClothingSe
             continue
 
         is_referee, skin_ratio, dark_ratio, skin_mask = has_long_pants(player_crop, pred_seg)
+        shirt_crop = None
+
+        if is_referee:
+            player.team = 0
+        else:
+            shirt_crop = extract_shirt_from_player(player_crop, pred_seg)
+            if shirt_crop.size > 0:
+                shirt_crops.append(shirt_crop)
+                valid_players.append(player)
 
         if DEBUG_MODE:
             debug_records.append({
@@ -110,25 +120,19 @@ def process_frame(image: np.ndarray, current_frame: Frame, segmenter: ClothingSe
                 "skin_ratio": skin_ratio,
                 "dark_ratio": dark_ratio,
                 "skin_mask": skin_mask,
+                "isolated_shirt": shirt_crop,
             })
 
-        if is_referee:
-            player.team = 0
-            continue
-
-        shirt_crop = extract_shirt_from_player(player_crop, pred_seg)
-        if shirt_crop.size > 0:
-            shirt_crops.append(shirt_crop)
-            valid_players.append(player)
-            
     dominant_colors_bgr = assign_teams_to_players(valid_players, shirt_crops)
 
     if DEBUG_MODE and debug_records:
         for record in debug_records:
             record["dominant_color_bgr"] = dominant_colors_bgr.get(id(record["player"]))
+
         save_debug_frame(image, debug_records)
 
     return current_frame
+
 
 @app.post("/assign-teams")
 async def assign_teams_endpoint(

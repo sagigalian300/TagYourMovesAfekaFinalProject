@@ -16,7 +16,9 @@ def _draw_legend(canvas: np.ndarray) -> None:
         canvas (np.ndarray): The BGR image to draw the legend onto in-place.
     """
     items = [
-        ((0, 255, 255), "Mask: Shirt (Class 4)"),
+        ((0, 255, 255), "Mask: Shirt Kept (Class 4)"),
+        ((0, 140, 255), "Mask: Filtered Skin/Edge"),
+        ((255, 220, 100), "Mask: Torso Fallback"),
         ((255, 0, 255), "Mask: Pants (Class 6)"),
         ((255, 255, 0), "Mask: Skin (60%-88%)"),
         ((0, 255, 0), "Box: Referee (Team 0)"),
@@ -65,7 +67,7 @@ def save_debug_frame(
         image (np.ndarray): The original full BGR frame.
         debug_records (List[Dict[str, Any]]): List of dicts containing 'player',
             'box' (x1, y1, x2, y2), 'pred_seg', 'skin_ratio', 'dark_ratio',
-            'skin_mask', and optionally 'dominant_color_bgr'.
+            'skin_mask', and optionally 'dominant_color_bgr' and 'isolated_shirt'.
         output_dir (str): Directory path where debug images will be saved.
         alpha (float): Transparency factor for the segmentation mask overlay.
     """
@@ -82,8 +84,24 @@ def save_debug_frame(
         roi = canvas[y1:y2, x1:x2]
         overlay = roi.copy()
 
-        # Class 4 = Upper-clothes (Yellow), Class 6 = Pants (Magenta)
-        overlay[pred_seg == 4] = (0, 255, 255)
+        # Class 4 = Upper-clothes, visualized with skin/edge filtering and fallback
+        raw_shirt_mask = (pred_seg == 4)
+        isolated_shirt = record.get("isolated_shirt")
+
+        if isolated_shirt is not None and isolated_shirt.size > 0:
+            cleaned_shirt_mask = np.any(isolated_shirt > 0, axis=2)
+
+            kept_mask = raw_shirt_mask & cleaned_shirt_mask
+            filtered_out_mask = raw_shirt_mask & (~cleaned_shirt_mask)
+            fallback_mask = (~raw_shirt_mask) & cleaned_shirt_mask
+
+            overlay[kept_mask] = (0, 255, 255)          # Yellow - Kept shirt pixels
+            overlay[filtered_out_mask] = (0, 140, 255)  # Orange - Filtered skin/edge
+            overlay[fallback_mask] = (255, 220, 100)    # Light Blue - Torso fallback
+        else:
+            overlay[raw_shirt_mask] = (0, 255, 255)
+
+        # Class 6 = Pants (Magenta)
         overlay[pred_seg == 6] = (255, 0, 255)
 
         # Paint detected skin pixels in the 60%-88% window in bright Cyan (BGR)
