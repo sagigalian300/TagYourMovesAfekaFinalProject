@@ -4,6 +4,31 @@ from scipy.optimize import linear_sum_assignment
 from contract.frame.Frame import Frame
 from src.track import Track
 
+def is_box_crowded(
+    target_idx: int,
+    det_boxes: list,
+    iou_threshold: float = 0.15
+) -> bool:
+    """Checks if a detected bounding box overlaps significantly with any other detection.
+
+    Used to prevent EMA signature contamination during player occlusions or crossings.
+
+    Args:
+        target_idx (int): Index of the detection box to evaluate.
+        det_boxes (list): List of all bounding boxes [x1, y1, x2, y2] in the frame.
+        iou_threshold (float, optional): Minimum IoU to consider the box crowded.
+            Defaults to 0.15.
+
+    Returns:
+        bool: True if the target box overlaps with another detection above the threshold.
+    """
+    target_box = det_boxes[target_idx]
+    for idx, other_box in enumerate(det_boxes):
+        if idx == target_idx:
+            continue
+        if calculate_iou(target_box, other_box) > iou_threshold:
+            return True
+    return False
 
 def calculate_iou(box_a: list, box_b: list) -> float:
     """Computes the Intersection over Union (IoU) metric between two bounding boxes.
@@ -123,7 +148,7 @@ class TrackerEngine:
             predicted_boxes.append(track.get_state())
 
         if len(self.active_tracks) == 0:
-            self._create_new_tracks(detections, list(range(len(detections))))
+            self._create_new_tracks(detections, det_boxes, list(range(len(detections))))
             return frame
 
         if len(detections) == 0:
@@ -155,7 +180,12 @@ class TrackerEngine:
 
         for t_idx, d_idx in zip(row_ind, col_ind):
             if cost_matrix[t_idx, d_idx] <= self.max_cost_threshold:
-                det_signature = getattr(detections[d_idx], "signature", None)
+                # Freeze signature update if the player crop is overlapping another player
+                if is_box_crowded(d_idx, det_boxes):
+                    det_signature = None
+                else:
+                    det_signature = getattr(detections[d_idx], "signature", None)
+
                 self.active_tracks[t_idx].update(det_boxes[d_idx], signature=det_signature)
                 detections[d_idx].tracking_id = self.active_tracks[t_idx].track_id
 
@@ -166,24 +196,29 @@ class TrackerEngine:
             if t_idx not in matched_track_indices:
                 track.hit_streak = 0
 
-        self._create_new_tracks(detections, list(unmatched_detections))
+        self._create_new_tracks(detections, det_boxes, list(unmatched_detections))
 
         # 6. Cleanup stale tracks
         self._cleanup_stale_tracks()
 
         return frame
 
-    def _create_new_tracks(self, detections: list, unmatched_indices: list) -> None:
+    def _create_new_tracks(self, detections: list, det_boxes: list, unmatched_indices: list) -> None:
         """Instantiates new tracks for unassigned detections and assigns tracking IDs.
 
         Args:
             detections (list): List of Player domain objects.
+            det_boxes (list): List of all bounding boxes in the frame for overlap checks.
             unmatched_indices (list): Indices pointing to unassigned detections.
         """
         for d_idx in unmatched_indices:
             player = detections[d_idx]
-            bbox = [player.x1, player.y1, player.x2, player.y2]
-            signature = getattr(player, "signature", None)
+            bbox = det_boxes[d_idx]
+            signature = (
+                None
+                if is_box_crowded(d_idx, det_boxes)
+                else getattr(player, "signature", None)
+            )
 
             new_track = Track(bbox, self.next_id, signature=signature)
             self.active_tracks.append(new_track)
