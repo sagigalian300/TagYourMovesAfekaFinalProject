@@ -1,11 +1,12 @@
+from typing import Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 from contract.frame.Frame import Frame
 from src.track import Track
 
+
 def calculate_iou(box_a: list, box_b: list) -> float:
-    """
-    Computes the Intersection over Union (IoU) metric between two bounding boxes.
+    """Computes the Intersection over Union (IoU) metric between two bounding boxes.
 
     Args:
         box_a (list): First bounding box [x1, y1, x2, y2].
@@ -26,12 +27,12 @@ def calculate_iou(box_a: list, box_b: list) -> float:
     box_a_area = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
     box_b_area = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
     iou = intersection_area / float(box_a_area + box_b_area - intersection_area + 1e-6)
-    
+
     return iou
 
+
 def calculate_center_distance(box_a: list, box_b: list) -> float:
-    """
-    Computes the Euclidean distance between the centers of two bounding boxes.
+    """Computes the Euclidean distance between the centers of two bounding boxes.
 
     Args:
         box_a (list): First bounding box [x1, y1, x2, y2].
@@ -44,20 +45,33 @@ def calculate_center_distance(box_a: list, box_b: list) -> float:
     cy_a = (box_a[1] + box_a[3]) / 2.0
     cx_b = (box_b[0] + box_b[2]) / 2.0
     cy_b = (box_b[1] + box_b[3]) / 2.0
-    
-    return float(np.sqrt((cx_a - cx_b)**2 + (cy_a - cy_b)**2))
+
+    return float(np.sqrt((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2))
+
+
+def calculate_cosine_distance(sig_a: np.ndarray, sig_b: np.ndarray) -> float:
+    """Computes the cosine distance between two L2-normalized embedding vectors.
+
+    Args:
+        sig_a (np.ndarray): First L2-normalized feature vector.
+        sig_b (np.ndarray): Second L2-normalized feature vector.
+
+    Returns:
+        float: Cosine distance clipped to [0.0, 1.0], where 0.0 is identical.
+    """
+    similarity = float(np.dot(sig_a, sig_b))
+    return float(np.clip(1.0 - similarity, 0.0, 1.0))
+
 
 class TrackerEngine:
-    """
-    Core tracking engine implementing SORT logic with Camera Motion Compensation (CMC)
-    using rim anchor points and a hybrid IoU/Distance cost matrix.
+    """Core tracking engine combining SORT, Rim-based CMC, and Re-ID signatures.
 
     Attributes:
-        active_tracks (list[Track]): A list of currently active tracked objects.
-        next_id (int): The next available unique tracking ID.
+        active_tracks (list[Track]): Currently active tracked objects.
+        next_id (int): Next available unique tracking ID.
         max_cost_threshold (float): Maximum allowed cost to validate an assignment.
-        max_age (int): Maximum frames a track is kept alive without a measurement update.
-        prev_rim_center (tuple): Center coordinates of the rim in the previous frame.
+        max_age (int): Maximum frames a track is kept alive without an update.
+        prev_rim_center (Optional[tuple]): Rim center coordinates from the previous frame.
     """
 
     def __init__(self):
@@ -66,26 +80,27 @@ class TrackerEngine:
         self.next_id: int = 1
         self.max_cost_threshold: float = 0.85
         self.max_age: int = 30
-        self.prev_rim_center: tuple = None
+        self.prev_rim_center: Optional[tuple] = None
 
     def update(self, frame: Frame) -> Frame:
-        """
-        Processes a new frame by compensating for camera motion, predicting track states,
-        matching them with new detections, and updating the internal tracking state.
+        """Processes a new frame using CMC, Kalman prediction, and hybrid matching.
 
         Args:
-            frame (Frame): The incoming frame containing raw object detections.
+            frame (Frame): Incoming frame containing player detections and optional signatures.
 
         Returns:
-            Frame: The updated frame with tracking IDs assigned to the players.
+            Frame: Updated frame with tracking IDs assigned to players.
         """
         detections = frame.players
         det_boxes = [[p.x1, p.y1, p.x2, p.y2] for p in detections]
+        det_sigs = [
+            np.asarray(p.signature, dtype=np.float32) if getattr(p, "signature", None) is not None else None
+            for p in detections
+        ]
 
-        # 1. Camera Motion Compensation (CMC) Using Rim as an Anchor
+        # 1. Camera Motion Compensation (CMC) using Rim as an anchor
         current_rim_center = None
         if frame.rims and len(frame.rims) > 0:
-            # We assume the first detected rim is the main anchor
             rim = frame.rims[0]
             current_rim_center = ((rim.x1 + rim.x2) / 2.0, (rim.y1 + rim.y2) / 2.0)
 
@@ -93,8 +108,7 @@ class TrackerEngine:
         if self.prev_rim_center and current_rim_center:
             dx = current_rim_center[0] - self.prev_rim_center[0]
             dy = current_rim_center[1] - self.prev_rim_center[1]
-            
-            # Sanity Check: If the shift is massive, it might be a false positive rim or a camera cut
+
             if abs(dx) > 300 or abs(dy) > 300:
                 dx, dy = 0.0, 0.0
 
@@ -116,18 +130,20 @@ class TrackerEngine:
             self._cleanup_stale_tracks()
             return frame
 
-        # 3. Construct Hybrid Cost Matrix (50% IoU + 50% Euclidean Distance)
+        # 3. Construct Hybrid Cost Matrix (IoU + Euclidean Distance + Cosine Distance)
         cost_matrix = np.zeros((len(predicted_boxes), len(det_boxes)), dtype=np.float32)
-        for t, pred_box in enumerate(predicted_boxes):
-            for d, det_box in enumerate(det_boxes):
-                iou = calculate_iou(pred_box, det_box)
+        for t, (track, pred_box) in enumerate(zip(self.active_tracks, predicted_boxes)):
+            for d, (det_box, det_sig) in enumerate(zip(det_boxes, det_sigs)):
+                iou_cost = 1.0 - calculate_iou(pred_box, det_box)
                 dist = calculate_center_distance(pred_box, det_box)
-                
-                # Normalize distance (Assuming ~400 pixels is a huge jump for a player in 1 frame)
                 norm_dist = min(dist / 400.0, 1.0)
-                
-                # Hybrid Cost: 0 = Perfect Match, 1 = Terrible Match
-                cost = 0.5 * (1.0 - iou) + 0.5 * norm_dist
+
+                if track.signature is not None and det_sig is not None:
+                    cos_cost = calculate_cosine_distance(track.signature, det_sig)
+                    cost = 0.35 * iou_cost + 0.35 * norm_dist + 0.30 * cos_cost
+                else:
+                    cost = 0.50 * iou_cost + 0.50 * norm_dist
+
                 cost_matrix[t, d] = cost
 
         # 4. Solve bipartite matching
@@ -138,44 +154,40 @@ class TrackerEngine:
         matched_track_indices = set()
 
         for t_idx, d_idx in zip(row_ind, col_ind):
-            cost_score = cost_matrix[t_idx, d_idx]
-            
-            if cost_score <= self.max_cost_threshold:
-                # Valid match
-                self.active_tracks[t_idx].update(det_boxes[d_idx])
+            if cost_matrix[t_idx, d_idx] <= self.max_cost_threshold:
+                det_signature = getattr(detections[d_idx], "signature", None)
+                self.active_tracks[t_idx].update(det_boxes[d_idx], signature=det_signature)
                 detections[d_idx].tracking_id = self.active_tracks[t_idx].track_id
-                
+
                 unmatched_detections.discard(d_idx)
                 matched_track_indices.add(t_idx)
 
-        # Unmatched Tracks get hit_streak reset
         for t_idx, track in enumerate(self.active_tracks):
             if t_idx not in matched_track_indices:
                 track.hit_streak = 0
 
-        # Unmatched Detections become new tracks
         self._create_new_tracks(detections, list(unmatched_detections))
 
-        # 6. Cleanup
+        # 6. Cleanup stale tracks
         self._cleanup_stale_tracks()
 
         return frame
 
     def _create_new_tracks(self, detections: list, unmatched_indices: list) -> None:
-        """
-        Instantiates new tracks for unassigned detections and assigns them tracking IDs.
+        """Instantiates new tracks for unassigned detections and assigns tracking IDs.
 
         Args:
-            detections (list): The list of Player domain objects.
+            detections (list): List of Player domain objects.
             unmatched_indices (list): Indices pointing to unassigned detections.
         """
         for d_idx in unmatched_indices:
             player = detections[d_idx]
             bbox = [player.x1, player.y1, player.x2, player.y2]
-            
-            new_track = Track(bbox, self.next_id)
+            signature = getattr(player, "signature", None)
+
+            new_track = Track(bbox, self.next_id, signature=signature)
             self.active_tracks.append(new_track)
-            
+
             player.tracking_id = self.next_id
             self.next_id += 1
 

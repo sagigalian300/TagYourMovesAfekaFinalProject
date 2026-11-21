@@ -1,9 +1,10 @@
+from typing import List, Optional
 import numpy as np
 from filterpy.kalman import KalmanFilter
 
+
 class Track:
-    """
-    Represents a single object track utilizing a Kalman Filter for state estimation.
+    """Represents a single object track utilizing a Kalman Filter and Re-ID signature.
 
     The state space is defined as [u, v, s, r, u_dot, v_dot, s_dot], where:
     - (u, v) is the center of the bounding box.
@@ -14,29 +15,39 @@ class Track:
     Attributes:
         track_id (int): Unique identifier assigned to the tracked object.
         kf (KalmanFilter): The Kalman Filter instance managing the kinematic state.
-        time_since_update (int): Number of consecutive frames without a matched detection.
-        hits (int): Total number of frames where this track was matched with a detection.
-        hit_streak (int): Number of consecutive frames this track has been matched.
-        age (int): Total number of frames since the track was instantiated.
+        signature (Optional[np.ndarray]): L2-normalized EMA appearance embedding.
+        time_since_update (int): Consecutive frames without a matched detection.
+        hits (int): Total frames where this track was matched with a detection.
+        hit_streak (int): Consecutive frames this track has been matched.
+        age (int): Total frames since the track was instantiated.
     """
 
-    def __init__(self, bbox: list, track_id: int):
-        """
-        Initializes the Track instance with an initial bounding box.
+    def __init__(
+        self,
+        bbox: list,
+        track_id: int,
+        signature: Optional[List[float]] = None
+    ):
+        """Initializes the Track instance with an initial bounding box and optional signature.
 
         Args:
-            bbox (list): The initial bounding box in [x1, y1, x2, y2] format.
-            track_id (int): The unique tracking ID to assign to this object.
+            bbox (list): Initial bounding box in [x1, y1, x2, y2] format.
+            track_id (int): Unique tracking ID assigned to this object.
+            signature (Optional[List[float]], optional): Initial L2-normalized Re-ID
+                embedding vector. Defaults to None.
         """
         self.track_id: int = track_id
         self.time_since_update: int = 0
         self.hits: int = 1
         self.hit_streak: int = 1
         self.age: int = 1
+        self.signature: Optional[np.ndarray] = (
+            np.asarray(signature, dtype=np.float32) if signature is not None else None
+        )
 
         # Initialize Kalman Filter: 7 state variables, 4 measurement variables
         self.kf: KalmanFilter = KalmanFilter(dim_x=7, dim_z=4)
-        
+
         # State transition matrix (F)
         self.kf.F = np.array([
             [1, 0, 0, 0, 1, 0, 0],
@@ -47,7 +58,7 @@ class Track:
             [0, 0, 0, 0, 0, 1, 0],
             [0, 0, 0, 0, 0, 0, 1]
         ])
-        
+
         # Measurement function (H)
         self.kf.H = np.array([
             [1, 0, 0, 0, 0, 0, 0],
@@ -55,11 +66,11 @@ class Track:
             [0, 0, 1, 0, 0, 0, 0],
             [0, 0, 0, 1, 0, 0, 0]
         ])
-        
+
         # Initial state covariance matrix (P) - High uncertainty for unobservable velocities
         self.kf.P[4:, 4:] *= 1000.
         self.kf.P *= 10.
-        
+
         # Process noise (Q) and Measurement noise (R)
         self.kf.Q[-1, -1] *= 0.01
         self.kf.Q[4:, 4:] *= 0.01
@@ -69,53 +80,75 @@ class Track:
         self.kf.x[:4] = self._convert_bbox_to_z(bbox)
 
     def predict(self) -> None:
-        """
-        Advances the state vector and covariance by one time step.
-        """
-        # Ensure bounding box area estimation does not become negative
+        """Advances the state vector and covariance by one time step."""
         if (self.kf.x[6] + self.kf.x[2]) <= 0:
             self.kf.x[6] = 0.0
-            
+
         self.kf.predict()
         self.age += 1
         self.time_since_update += 1
 
-    def update(self, bbox: list) -> None:
-        """
-        Updates the state vector with the newly matched bounding box detection.
+    def apply_camera_shift(self, dx: float, dy: float) -> None:
+        """Shifts the Kalman Filter's internal position state to compensate for camera motion.
 
         Args:
-            bbox (list): The matched bounding box in [x1, y1, x2, y2] format.
+            dx (float): Positional shift along the x-axis in pixels.
+            dy (float): Positional shift along the y-axis in pixels.
+        """
+        self.kf.x[0] += dx
+        self.kf.x[1] += dy
+
+    def update(
+        self,
+        bbox: list,
+        signature: Optional[List[float]] = None,
+        ema_alpha: float = 0.9
+    ) -> None:
+        """Updates the kinematic state and smooths the appearance signature via EMA.
+
+        Args:
+            bbox (list): Matched bounding box in [x1, y1, x2, y2] format.
+            signature (Optional[List[float]], optional): New L2-normalized Re-ID
+                embedding vector. Defaults to None.
+            ema_alpha (float, optional): Smoothing factor for exponential moving
+                average (higher retains more history). Defaults to 0.9.
         """
         self.time_since_update = 0
         self.hits += 1
         self.hit_streak += 1
         self.kf.update(self._convert_bbox_to_z(bbox))
 
+        if signature is not None:
+            new_sig = np.asarray(signature, dtype=np.float32)
+            if self.signature is None:
+                self.signature = new_sig
+            else:
+                blended = ema_alpha * self.signature + (1.0 - ema_alpha) * new_sig
+                norm = np.linalg.norm(blended)
+                if norm > 0:
+                    self.signature = blended / norm
+
     def get_state(self) -> list:
-        """
-        Returns the current bounding box estimate based on the internal state.
+        """Returns the current bounding box estimate based on the internal state.
 
         Returns:
-            list: The predicted bounding box in [x1, y1, x2, y2] format.
+            list: Predicted bounding box in [x1, y1, x2, y2] format.
         """
         if self.kf.x[2] < 0:
             self.kf.x[2] = 0
-            
-        # Convert state [u, v, s, r] back to [x1, y1, x2, y2]
-        u, v, s, r = self.kf.x[:4].reshape((4, ))
+
+        u, v, s, r = self.kf.x[:4].reshape((4,))
         w = np.sqrt(s * r)
-        h = s / w
+        h = s / w if w > 0 else 0
         x1 = u - w / 2.0
         y1 = v - h / 2.0
         x2 = u + w / 2.0
         y2 = v + h / 2.0
-        
+
         return [x1, y1, x2, y2]
 
     def _convert_bbox_to_z(self, bbox: list) -> np.ndarray:
-        """
-        Converts a bounding box to the observation format required by the Kalman Filter.
+        """Converts a bounding box to the observation format required by the Kalman Filter.
 
         Args:
             bbox (list): Bounding box in [x1, y1, x2, y2] format.
@@ -128,18 +161,5 @@ class Track:
         u = bbox[0] + w / 2.0
         v = bbox[1] + h / 2.0
         s = w * h
-        # Prevent division by zero if width is extremely small
         r = w / float(h) if h > 0 else 0
         return np.array([u, v, s, r]).reshape((4, 1))
-    
-    def apply_camera_shift(self, dx: float, dy: float) -> None:
-        """
-        Shifts the Kalman Filter's internal position state to compensate for camera movement.
-        This ensures predictions remain accurate even when the background shifts.
-
-        Args:
-            dx (float): The positional shift along the x-axis in pixels.
-            dy (float): The positional shift along the y-axis in pixels.
-        """
-        self.kf.x[0] += dx  # Update the u coordinate (center x)
-        self.kf.x[1] += dy  # Update the v coordinate (center y)

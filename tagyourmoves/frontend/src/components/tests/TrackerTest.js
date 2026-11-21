@@ -5,21 +5,37 @@ import Button from '@/components/ui/Button';
 
 // API Endpoints
 const OD_MS_URL = 'http://localhost:8001/detect';
+const SIGNATURE_MS_URL = 'http://localhost:8004/extract-signatures';
 const TRACKER_MS_URL = 'http://localhost:8002/track';
-const EXTRACTION_FPS = 3; 
+const EXTRACTION_FPS = 15;
+
+// Helper to keep sample JSON readable by collapsing 512-dim signature arrays
+const formatSampleJson = (frame) => {
+  if (!frame) return "";
+  return JSON.stringify(
+    frame,
+    (key, value) => {
+      if (key === 'signature' && Array.isArray(value)) {
+        return `[${value.length} floats]`;
+      }
+      return value;
+    },
+    2
+  );
+};
 
 export default function TrackerTest() {
   const [file, setFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
-  
+
   // Pipeline States
-  const [status, setStatus] = useState("idle"); 
+  const [status, setStatus] = useState("idle"); // idle, extracting, tracking, done, error
   const [progressMsg, setProgressMsg] = useState("");
   const [trackedFrames, setTrackedFrames] = useState([]);
   const [error, setError] = useState(null);
 
-  // --- NEW: Fullscreen state ---
+  // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Refs for visual playback
@@ -58,7 +74,7 @@ export default function TrackerTest() {
     setIsFullscreen(false);
   };
 
-  // --- Core Pipeline: Extract -> Detect -> Track ---
+  // --- Core Pipeline: Extract -> Detect -> Extract Signatures -> Track ---
   const handleRunPipeline = async () => {
     if (!file || !videoUrl) return;
 
@@ -80,57 +96,74 @@ export default function TrackerTest() {
       const duration = hiddenVideo.duration;
       const interval = 1 / EXTRACTION_FPS;
       let currentTime = 0;
-      
+
       const hiddenCanvas = document.createElement('canvas');
       hiddenCanvas.width = hiddenVideo.videoWidth;
       hiddenCanvas.height = hiddenVideo.videoHeight;
       const ctx = hiddenCanvas.getContext('2d');
 
-      const rawDetections = [];
+      const framesWithSignatures = [];
       let frameCount = 1;
 
-      // 2. Extract frames and send to Object Detection MS
+      // 2. Extract frames, run Object Detection, and immediately extract Re-ID Signatures
       while (currentTime <= duration) {
         setProgressMsg(`Detecting objects: Frame ${frameCount} (${Math.round(currentTime)}s)`);
-        
+
         hiddenVideo.currentTime = currentTime;
         await new Promise((resolve) => {
           hiddenVideo.onseeked = resolve;
         });
 
         ctx.drawImage(hiddenVideo, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-        
+
         const blob = await new Promise((resolve) => {
           hiddenCanvas.toBlob(resolve, 'image/jpeg', 0.8);
         });
 
-        const formData = new FormData();
-        formData.append('image', blob, `frame_${frameCount}.jpg`);
-        formData.append('frame_number', frameCount.toString());
-        formData.append('timestamp_ms', Math.round(currentTime * 1000).toString());
+        // Step 2a: Object Detection MS
+        const odFormData = new FormData();
+        odFormData.append('image', blob, `frame_${frameCount}.jpg`);
+        odFormData.append('frame_number', frameCount.toString());
+        odFormData.append('timestamp_ms', Math.round(currentTime * 1000).toString());
 
         const odResponse = await fetch(OD_MS_URL, {
           method: 'POST',
-          body: formData,
+          body: odFormData,
         });
 
         if (!odResponse.ok) throw new Error(`Object Detection failed at frame ${frameCount}`);
         const odData = await odResponse.json();
-        rawDetections.push(odData);
+
+        // Step 2b: Player Signature MS (reusing the frame blob while still in memory)
+        setProgressMsg(`Extracting signatures: Frame ${frameCount} (${Math.round(currentTime)}s)`);
+
+        const sigFormData = new FormData();
+        sigFormData.append('image', blob, `frame_${frameCount}.jpg`);
+        sigFormData.append('frame_data', JSON.stringify(odData));
+
+        const sigResponse = await fetch(SIGNATURE_MS_URL, {
+          method: 'POST',
+          body: sigFormData,
+        });
+
+        if (!sigResponse.ok) throw new Error(`Player Signature extraction failed at frame ${frameCount}`);
+        const sigData = await sigResponse.json();
+
+        framesWithSignatures.push(sigData);
 
         currentTime += interval;
         frameCount++;
       }
 
-      // 3. Send sequential data to Tracker MS
+      // 3. Send sequential data (including signatures) to Tracker MS
       setStatus("tracking");
       const sessionId = `test_session_${Date.now()}`;
       const finalTrackedData = [];
 
-      for (let i = 0; i < rawDetections.length; i++) {
-        setProgressMsg(`Tracking objects: Frame ${i + 1}/${rawDetections.length}`);
-        const frameData = rawDetections[i];
-        
+      for (let i = 0; i < framesWithSignatures.length; i++) {
+        setProgressMsg(`Tracking objects: Frame ${i + 1}/${framesWithSignatures.length}`);
+        const frameData = framesWithSignatures[i];
+
         const trackerPayload = {
           session_id: sessionId,
           frame_number: frameData.frame_number,
@@ -189,10 +222,10 @@ export default function TrackerTest() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const currentMs = video.currentTime * 1000;
-    
+
     let closestFrame = trackedFrames[0];
     let minDiff = Math.abs(closestFrame.timestamp_ms - currentMs);
-    
+
     for (let i = 1; i < trackedFrames.length; i++) {
       const diff = Math.abs(trackedFrames[i].timestamp_ms - currentMs);
       if (diff < minDiff) {
@@ -201,7 +234,7 @@ export default function TrackerTest() {
       }
     }
 
-    // Drop drawing if frame is out of sync sync
+    // Drop drawing if frame is out of sync
     if (minDiff > (1000 / EXTRACTION_FPS) * 1.5) {
       animationRef.current = requestAnimationFrame(drawBoxesForCurrentTime);
       return;
@@ -210,7 +243,7 @@ export default function TrackerTest() {
     // Draw Players with Tracking IDs
     ctx.lineWidth = 4;
     ctx.font = 'bold 24px monospace';
-    
+
     closestFrame.players?.forEach(player => {
       const { x1, y1, x2, y2, tracking_id } = player;
       if (x1 === undefined) return;
@@ -223,7 +256,7 @@ export default function TrackerTest() {
 
       const label = tracking_id !== null ? `ID: ${tracking_id}` : 'Detecting...';
       const textWidth = ctx.measureText(label).width;
-      
+
       ctx.fillStyle = '#3b82f6';
       ctx.fillRect(x1, y1 - 30, textWidth + 10, 30);
       ctx.fillStyle = 'white';
@@ -245,7 +278,7 @@ export default function TrackerTest() {
   return (
     <div className="w-full text-left">
       {!file ? (
-        <div 
+        <div
           className={`border-2 border-dashed rounded-lg p-10 text-center transition-colors ${
             isDragging ? 'border-black bg-gray-50' : 'border-gray-300 hover:border-gray-400'
           }`}
@@ -257,13 +290,13 @@ export default function TrackerTest() {
             <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
           </div>
           <p className="text-sm font-medium text-gray-700 mb-1">Upload a short video for Tracker Testing</p>
-          <p className="text-xs text-gray-500 mb-6">MP4, WebM up to 20MB</p>
-          
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileChange} 
-            className="hidden" 
+          <p className="text-xs text-gray-500 mb-6">MP4, WebM up to 20MB (OD + Re-ID Signatures + Tracker)</p>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            className="hidden"
             accept="video/*"
           />
           <Button variant="outline" onClick={() => fileInputRef.current?.click()} className="mx-auto">
@@ -272,28 +305,25 @@ export default function TrackerTest() {
         </div>
       ) : (
         <div className="flex flex-col xl:flex-row gap-6 items-start">
-          
+
           {/* Layout Wrapper for Video */}
           <div className="w-full xl:w-1/2 flex flex-col gap-4">
-            
-            {/* 
-              This div morphs from a standard container into a fixed fullscreen modal!
-              Because we don't unmount the elements, the video continues playing smoothly.
-            */}
-            <div className={isFullscreen 
-              ? "fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-6" 
+
+            {/* Morphs from a standard container into a fixed fullscreen modal without unmounting */}
+            <div className={isFullscreen
+              ? "fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-6"
               : "relative rounded-lg overflow-hidden border border-gray-200 shadow-sm bg-black flex items-center justify-center min-h-[300px]"
             }>
-              
+
               <div className={`relative inline-block ${isFullscreen ? 'w-auto max-w-full max-h-full' : 'w-full'}`}>
-                
+
                 {/* Visual Video Player */}
-                <video 
+                <video
                   ref={visualVideoRef}
-                  src={videoUrl} 
-                  className={`block ${isFullscreen ? 'max-h-[90vh] w-auto' : 'w-full h-auto'}`} 
-                  controls={status === "done"} 
-                  controlsList="nofullscreen" // <-- CRITICAL: Disables native fullscreen button
+                  src={videoUrl}
+                  className={`block ${isFullscreen ? 'max-h-[90vh] w-auto' : 'w-full h-auto'}`}
+                  controls={status === "done"}
+                  controlsList="nofullscreen"
                   onPlay={() => {
                     if (status === "done") {
                       if (animationRef.current) cancelAnimationFrame(animationRef.current);
@@ -301,16 +331,16 @@ export default function TrackerTest() {
                     }
                   }}
                 />
-                
+
                 {/* Transparent Canvas Overlay */}
-                <canvas 
+                <canvas
                   ref={canvasRef}
                   className="absolute top-0 left-0 w-full h-full pointer-events-none"
                 />
 
                 {/* Custom Expand / Close Button */}
                 {status === "done" && (
-                  <button 
+                  <button
                     type="button"
                     onClick={() => setIsFullscreen(!isFullscreen)}
                     className={`absolute z-20 bg-black/70 hover:bg-black text-white rounded-md transition-colors shadow-md backdrop-blur-sm border border-gray-600 cursor-pointer ${
@@ -327,7 +357,7 @@ export default function TrackerTest() {
                 )}
               </div>
             </div>
-            
+
             {/* Buttons show only when NOT in fullscreen */}
             {!isFullscreen && (
               <>
@@ -335,16 +365,16 @@ export default function TrackerTest() {
                   <Button variant="outline" onClick={handleClear} disabled={status === "extracting" || status === "tracking"} className="flex-1">
                     Clear
                   </Button>
-                  <Button 
-                    variant="primary" 
-                    onClick={handleRunPipeline} 
-                    disabled={status === "extracting" || status === "tracking"} 
+                  <Button
+                    variant="primary"
+                    onClick={handleRunPipeline}
+                    disabled={status === "extracting" || status === "tracking"}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-700 border-indigo-700 text-white"
                   >
                     {(status === "extracting" || status === "tracking") ? 'Processing...' : 'Run Pipeline'}
                   </Button>
                 </div>
-                
+
                 {error && (
                   <div className="p-3 text-sm text-red-600 bg-red-50 rounded-md border border-red-100">
                     {error}
@@ -365,9 +395,9 @@ export default function TrackerTest() {
                   </span>
                 )}
               </div>
-              
+
               <div className="flex-1 overflow-y-auto relative custom-scrollbar flex flex-col justify-center items-center p-6 text-center">
-                
+
                 {status === "idle" && (
                   <span className="text-gray-600 font-mono text-sm">Click 'Run Pipeline' to start processing</span>
                 )}
@@ -388,12 +418,12 @@ export default function TrackerTest() {
                       <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
                     </div>
                     <h3 className="text-green-400 font-bold text-lg">Tracking Completed</h3>
-                    <p className="text-gray-400 text-sm mb-4">Play the video to see synchronized bounding boxes and consistent tracking IDs.</p>
-                    
+                    <p className="text-gray-400 text-sm mb-4">Play the video to see synchronized bounding boxes and Re-ID tracking IDs.</p>
+
                     <div className="bg-black/50 p-4 rounded-md w-full text-left overflow-y-auto custom-scrollbar max-h-[200px]">
                       <p className="text-xs text-gray-500 mb-2 sticky top-0">Sample Frame Data (Frame 1):</p>
                       <pre className="text-[10px] font-mono text-gray-300 whitespace-pre-wrap break-words">
-                        {JSON.stringify(trackedFrames[0], null, 2)}
+                        {formatSampleJson(trackedFrames[0])}
                       </pre>
                     </div>
                   </div>
@@ -402,7 +432,7 @@ export default function TrackerTest() {
               </div>
             </div>
           </div>
-          
+
         </div>
       )}
     </div>

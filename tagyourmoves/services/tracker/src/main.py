@@ -57,6 +57,7 @@ class PlayerSchema(BaseModel):
     team: Optional[int] = None
     shirt_number: Optional[int] = None
     has_ball: bool = False
+    signature: Optional[List[float]] = None
 
 class FramePayload(BaseModel):
     session_id: str
@@ -74,6 +75,8 @@ async def track_frame_endpoint(payload: FramePayload):
     Receives detection data for a single frame, updates the tracking state,
     and assigns tracking_ids to players.
     """
+    print("[DEBUG] Incoming signature present:", payload.players[0].signature is not None if payload.players else "no players")
+    
     # 1. Retrieve or initialize the tracker engine for this specific video session
     session_id = payload.session_id
     if session_id not in active_sessions:
@@ -83,7 +86,17 @@ async def track_frame_endpoint(payload: FramePayload):
 
     # 2. Convert incoming Pydantic payload to your Domain Objects (contract)
     domain_players = [
-        Player(p.confidence, p.x1, p.y1, p.x2, p.y2, p.tracking_id, p.team, p.shirt_number)
+        Player(
+            confidence=p.confidence,
+            x1=p.x1,
+            y1=p.y1,
+            x2=p.x2,
+            y2=p.y2,
+            tracking_id=p.tracking_id,
+            team=p.team,
+            shirt_number=p.shirt_number,
+            signature=p.signature,
+        )
         for p in payload.players
     ]
     
