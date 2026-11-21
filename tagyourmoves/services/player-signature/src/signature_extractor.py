@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from torchreid.reid.utils import FeatureExtractor
 
+
 class SignatureExtractor:
     """Wraps a pretrained OSNet Re-ID model to generate normalized appearance vectors.
 
@@ -14,16 +15,23 @@ class SignatureExtractor:
         extractor (FeatureExtractor): The underlying torchreid feature extractor.
     """
 
-    def __init__(self, model_name: str = "osnet_x0_25"):
-        """Initializes the SignatureExtractor and loads the model onto GPU if available.
+    def __init__(
+        self,
+        model_name: str = "osnet_ain_x1_0",
+        model_path: str = ""
+    ):
+        """Initializes the SignatureExtractor and loads Re-ID weights onto GPU if available.
 
         Args:
             model_name (str, optional): The OSNet architecture variant to load.
-                Defaults to "osnet_x0_25".
+                Defaults to "osnet_ain_x1_0".
+            model_path (str, optional): Path to the pretrained Re-ID .pth weights file.
+                Defaults to "".
         """
         self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
         self.extractor = FeatureExtractor(
             model_name=model_name,
+            model_path=model_path,
             device=self.device
         )
 

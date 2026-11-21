@@ -6,6 +6,7 @@ appearance signatures (Re-ID embeddings) for detected players using a shared
 OSNet model, and returns the updated Frame data.
 """
 
+import os
 import json
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
@@ -22,19 +23,26 @@ from src.frame_processor import process_frame
 # Global dictionary to hold the AI model in memory while the server runs
 shared_resources = {}
 
+# Constants
+MODEL_PATH = os.path.join("models", "player_signature_model.pth")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manages the lifespan of the FastAPI application.
 
-    Loads the OSNet Re-ID model into memory once during startup and cleans it 
-    up during shutdown to prevent loading delays on incoming requests.
+    Loads the OSNet Re-ID model with pretrained weights into memory once during
+    startup and cleans it up during shutdown to prevent loading delays on
+    incoming requests.
 
     Args:
         app (FastAPI): The FastAPI application instance.
     """
-    print("[Startup] Initializing AI Model (Loading shared OSNet Re-ID extractor)...")
-    shared_resources["extractor"] = SignatureExtractor(model_name="osnet_x0_25")
+    print(f"[Startup] Initializing AI Model from {MODEL_PATH}...")
+    shared_resources["extractor"] = SignatureExtractor(
+        model_name="osnet_ain_x1_0",
+        model_path=MODEL_PATH
+    )
 
     print(f"[Device Check] Is PyTorch CUDA available? {torch.cuda.is_available()}")
     print(f"[Device Check] Model is loaded on: {shared_resources['extractor'].device}")
