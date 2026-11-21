@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 class Player:
     """
@@ -24,7 +24,8 @@ class Player:
         y2: float, 
         tracking_id: Optional[int] = None, 
         team: Optional[int] = None, 
-        shirt_number: Optional[int] = None
+        shirt_number: Optional[int] = None,
+        signature: Optional[List[float]] = None
     ):
         """
         Initializes the Player instance.
@@ -55,3 +56,5 @@ class Player:
         
         # Initialized with False by default
         self.has_ball: bool = False
+
+        self.signature: Optional[List[float]] = signature # will help the tracker

@@ -1,0 +1,18 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+torch==2.4.0+cu118
+torchvision==0.19.0+cu118
+
+torchreid
+gdown
+scipy
+yacs
+tensorboard
+h5py
+opencv-python-headless
+numpy
+Pillow
+
+fastapi
+uvicorn
+python-multipart
