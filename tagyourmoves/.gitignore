@@ -55,7 +55,7 @@ ENV/
 # -------------------------
 # Ignore heavy model weights and checkpoints
 # *.pt
-*.pth
+# *.pth
 *.onnx
 *.weights
 *.engine
