@@ -24,7 +24,8 @@ from src.frame_processor import process_frame
 shared_resources = {}
 
 # Constants
-MODEL_PATH = os.path.join("models", "player_signature_model.pth")
+MODEL_PATH = os.path.join("models", "osnet_x1_0_msmt17.pth")
+# MODEL_PATH = os.path.join("models", "player_signature_model.pth")
 
 
 @asynccontextmanager
@@ -39,8 +40,12 @@ async def lifespan(app: FastAPI):
         app (FastAPI): The FastAPI application instance.
     """
     print(f"[Startup] Initializing AI Model from {MODEL_PATH}...")
+    # shared_resources["extractor"] = SignatureExtractor(
+    #     model_name="osnet_ain_x1_0",
+    #     model_path=MODEL_PATH
+    # )
     shared_resources["extractor"] = SignatureExtractor(
-        model_name="osnet_ain_x1_0",
+        model_name="osnet_x1_0",
         model_path=MODEL_PATH
     )
 
