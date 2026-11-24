@@ -7,7 +7,7 @@ import Button from '@/components/ui/Button';
 const OD_MS_URL = 'http://localhost:8001/detect';
 const SIGNATURE_MS_URL = 'http://localhost:8004/extract-signatures';
 const TRACKER_MS_URL = 'http://localhost:8002/track';
-const EXTRACTION_FPS = 15;
+const EXTRACTION_FPS = 25;
 
 // Helper to keep sample JSON readable by collapsing 512-dim signature arrays
 const formatSampleJson = (frame) => {
@@ -33,6 +33,7 @@ export default function TrackerTest() {
   const [status, setStatus] = useState("idle"); // idle, extracting, tracking, done, error
   const [progressMsg, setProgressMsg] = useState("");
   const [trackedFrames, setTrackedFrames] = useState([]);
+  const [processingTime, setProcessingTime] = useState(null);
   const [error, setError] = useState(null);
 
   // Fullscreen state
@@ -69,6 +70,7 @@ export default function TrackerTest() {
     setFile(selectedFile);
     setVideoUrl(URL.createObjectURL(selectedFile));
     setTrackedFrames([]);
+    setProcessingTime(null);
     setStatus("idle");
     setError(null);
     setIsFullscreen(false);
@@ -81,6 +83,9 @@ export default function TrackerTest() {
     setStatus("extracting");
     setError(null);
     setTrackedFrames([]);
+    setProcessingTime(null);
+
+    const startTime = performance.now();
 
     try {
       // 1. Setup hidden video element for frame extraction
@@ -184,6 +189,8 @@ export default function TrackerTest() {
         finalTrackedData.push(trackedFrame);
       }
 
+      const elapsedSeconds = ((performance.now() - startTime) / 1000).toFixed(2);
+      setProcessingTime(elapsedSeconds);
       setTrackedFrames(finalTrackedData);
       setStatus("done");
       setProgressMsg("Pipeline completed successfully!");
@@ -198,6 +205,7 @@ export default function TrackerTest() {
     setFile(null);
     setVideoUrl(null);
     setTrackedFrames([]);
+    setProcessingTime(null);
     setStatus("idle");
     setError(null);
     setIsFullscreen(false);
@@ -391,7 +399,7 @@ export default function TrackerTest() {
                 <span className="text-xs font-mono text-gray-400">Tracker Execution Status</span>
                 {status === "done" && (
                   <span className="text-xs font-mono text-green-400">
-                    Tracked {trackedFrames.length} Frames
+                    Tracked {trackedFrames.length} Frames {processingTime && `• ${processingTime}s`}
                   </span>
                 )}
               </div>

@@ -9,6 +9,7 @@ import TeamAssignment from '@/components/tests/TeamAssignment';
 import TrackerTest from '@/components/tests/TrackerTest';
 import BallRepair from '@/components/tests/BallRepair';
 import PlayerSignature from '@/components/tests/PlayerSignature';
+import BackendTrackerTest from '@/components/tests/BackendTrackerTest';
 
 export default function TestsPage() {
   const [activeTab, setActiveTab] = useState('object-detection');
@@ -98,6 +99,18 @@ export default function TestsPage() {
               <span className="absolute bottom-0 left-0 w-full h-0.5 bg-black rounded-t-md" />
             )}
           </button>
+
+          <button
+            onClick={() => setActiveTab('backend-tracker')}
+            className={`pb-3 text-sm font-medium transition-colors relative ${
+              activeTab === 'backend-tracker' ? 'text-black' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Backend Orchestrator
+            {activeTab === 'backend-tracker' && (
+              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-black rounded-t-md" />
+            )}
+          </button>
         </div>
 
         {/* Active Test Content */}
@@ -153,6 +166,20 @@ export default function TestsPage() {
               }
             >
               <PlayerSignature />
+            </TestCard>
+          )}
+
+          {activeTab === 'backend-tracker' && (
+            <TestCard
+              title="Backend Orchestrator (Video Pipeline)"
+              description="Server-side FFmpeg extraction, Object Detection, Re-ID Signatures, and Tracking via Node.js."
+              icon={
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+                </svg>
+              }
+            >
+              <BackendTrackerTest />
             </TestCard>
           )}
         </div>
